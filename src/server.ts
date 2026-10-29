@@ -132,6 +132,7 @@ const server=createServer(async(req,res)=>{
   try{
     if(req.method==='GET' && (url.pathname==='/' || url.pathname==='/index.html'))return send(res,200,html,'text/html; charset=utf-8');
     if(req.method==='GET' && url.pathname==='/status.js')return send(res,200,readFileSync(resolve(publicDir,'status.js'),'utf8'),'text/javascript; charset=utf-8');
+    if(req.method==='GET' && url.pathname==='/dependency-planner.js')return send(res,200,readFileSync(resolve(publicDir,'dependency-planner.js'),'utf8'),'text/javascript; charset=utf-8');
     if(req.method==='GET' && url.pathname==='/api/health')return json(res,200,{ok:true,mode:'local-proxy',writeEnabled:ENABLE_WRITES,authMode:AUTH_MODE,oracleBase:ORACLE_BASE.toString(),preloadedSources:JSON.parse(privateJson('sources.json',PLACEHOLDER)).length});
     if(url.pathname.startsWith('/api/oracle/'))return await oracle(req,res,url);
     return json(res,404,{error:'Ruta no encontrada.'});
