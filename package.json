@@ -1,0 +1,21 @@
+{
+  "name": "zpot-data-vb-g3",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ZPOT BNCR Visual Builder Gen 3: comparador, consolidador y publicador por API Node.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json && node scripts/copy-public.mjs",
+    "start": "node dist/server.js",
+    "dev": "npm run build && npm start",
+    "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.3"
+  }
+}
