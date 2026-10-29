@@ -70,3 +70,18 @@ Para usar Bearer, cambia `ORACLE_AUTH_MODE=bearer` y configura `ORACLE_BEARER_TO
 - POST/PATCH requieren dos habilitaciones: variable explícita de servidor y confirmación del usuario en la interfaz.
 - El código fuente publicado no contiene archivos ni registros del BNCR.
 - Para producción se necesita un procedimiento de migración autorizado con respaldo, validación de esquemas/relaciones y credenciales con privilegios mínimos.
+
+## Orden de carga por relaciones — migración por etapas
+
+En **Publicar en Oracle → Plan de carga por relaciones**, ZPOT calcula un orden topológico utilizando las relaciones `outgoing` del modelo de Business Objects, tomando la metadata de los ZIP de aplicación y del diccionario precargado.
+
+- Los **objetos padre** se importan antes que los objetos dependientes. Por ejemplo, `AbsenceLapseCatalogue` y `AbsenceTypeCatalogue` antes de `AbsenceCatalogue`; `Process` y `ProcessStages` antes de `ProcessStageProcess`; `Cases`, `ProcessStages` y `CaseStageStatus` antes de `CaseStage`.
+- El modo predeterminado envía **una etapa a la vez**, pide confirmación adicional por etapa y conserva la auditoría JSON con el orden, los registros procesados y los errores.
+- Antes de escribir cada etapa hace GET de la colección y comprueba las referencias a registros padres que no se hayan cargado en esta ejecución, con un máximo de 250 consultas de referencia por etapa. Si la validación falla, se detiene.
+- Un error de POST/PATCH **detiene las etapas dependientes**. No se reintentan inserciones automáticamente, para evitar duplicados.
+- Si la importación abarca varias tablas con llaves foráneas, hay que preservar los IDs originales o preparar una estrategia de remapeo. No se remapean automáticamente IDs que genere Oracle.
+- Las relaciones circulares o las autorreferencias que no puedan resolverse se señalan explícitamente. La herramienta no presume un orden inventado.
+- **Restablecer plan** inicia un nuevo intento pero **no revierte** los registros ya insertados. Conciliar y respaldar antes de reintentar. El progreso entre etapas no se guarda al recargar la página.
+- El **orden de publicación** proviene de las llaves foráneas del modelo, NO de `orderPos`, que controla el flujo dinámico de negocio.
+
+Este procedimiento está diseñado para **un ambiente de desarrollo aislado**. Un GET exitoso no concede permiso POST/PATCH: el servidor Oracle debe autorizar cada operación. No existe transacción ni rollback global.
