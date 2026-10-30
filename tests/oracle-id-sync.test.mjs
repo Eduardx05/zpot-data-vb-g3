@@ -91,7 +91,7 @@ test('missing previously mapped Oracle ID aborts instead of creating a duplicate
   read:async id=>{calls.push('GET '+id);throw Object.assign(new Error('Not found'),{status:404});},
   update:async()=>{calls.push('PATCH');throw Error('unexpected update');},
   create:async()=>{calls.push('POST');throw Error('unexpected POST');}
- },{mappedTargetId:'921'}),/previamente asociado/);
+ },{mappedTargetId:'921'}),/previamente.*ya no existe.*No se creará/);
  assert.deepEqual(calls,['GET 921']);
 });
 
