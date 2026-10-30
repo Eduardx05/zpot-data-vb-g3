@@ -440,7 +440,7 @@ async function pubCheckRowReferences(pack,row,session,base){
 function pubIssueDetails(table,row,error,stage){
  const message=String(error?.message||error).slice(0,1500);
  const oracleDetail=String(error?.oracleDetail||'').slice(0,1000);
- const field=String(error?.field||/Non-unique values found for\\s+([A-Za-z][A-Za-z0-9_]*)/i.exec(oracleDetail||message)?.[1]||'');
+ const field=String(error?.field||/Non-unique values found for\s+([A-Za-z][A-Za-z0-9_]*)/i.exec(oracleDetail||message)?.[1]||'');
  const sensitive=/TOKEN|PASSWORD|PASS|SECRET|CREDENTIAL|AUTH|CERTIFICATE|PRIVATE|KEY/i.test(field)&&field!=='keyCatalog';
  const raw=field?row?.[field]:undefined;
  const fieldValue=raw===null||raw===undefined?'':sensitive?'[oculto]':String(raw).slice(0,120);
