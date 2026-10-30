@@ -70,3 +70,40 @@ test('parent rows are ordered before self-referencing children',()=>{
   {id:'1',parent:'2'},{id:'2',parent:'1'}
  ],[{field:'parent',target:'Catalog'}]),/circular/);
 });
+
+test('restored Oracle ID is the PATCH target and must not trigger POST',async()=>{
+ const sync=load('oracle-record-sync.js').ZPOTOracleRecordSync;
+ const calls=[];
+ const result=await sync('21',{
+  read:async id=>{calls.push('GET '+id);return {status:200,json:{id:921}};},
+  update:async id=>{calls.push('PATCH '+id);return {status:200,json:{id:921}};},
+  create:async()=>{calls.push('POST');throw Error('POST not allowed');}
+ },{mappedTargetId:'921'});
+ assert.deepEqual(calls,['GET 921','PATCH 921']);
+ assert.equal(result.operation,'updated');
+ assert.equal(result.targetId,'921');
+});
+
+test('missing previously mapped Oracle ID aborts instead of creating a duplicate',async()=>{
+ const sync=load('oracle-record-sync.js').ZPOTOracleRecordSync;
+ const calls=[];
+ await assert.rejects(sync('21',{
+  read:async id=>{calls.push('GET '+id);throw Object.assign(new Error('Not found'),{status:404});},
+  update:async()=>{calls.push('PATCH');throw Error('unexpected update');},
+  create:async()=>{calls.push('POST');throw Error('unexpected POST');}
+ },{mappedTargetId:'921'}),/previamente asociado/);
+ assert.deepEqual(calls,['GET 921']);
+});
+
+test('restored migration audit map remaps child FKs consistently',()=>{
+ const registry=load('oracle-id-mapping.js').ZPOTOracleIdTools.createRegistry();
+ const count=registry.load({Cases:{'21':'921'},ProcessStages:{'8':'508'}});
+ assert.equal(count,2);
+ assert.equal(registry.get('Cases','21'),'921');
+ assert.deepEqual(JSON.parse(JSON.stringify(registry.rewrite({cases:21,processStages:8},[
+  {field:'cases',target:'Cases'},{field:'processStages',target:'ProcessStages'}
+ ]).row)),{cases:921,processStages:508});
+ assert.throws(()=>registry.load({Cases:{'21':'999'}}),/Conflicto/);
+ assert.equal(registry.get('Cases','21'),'921');
+ assert.throws(()=>registry.load({Cases:{'bad id':'12'}}),/inválida/);
+});
