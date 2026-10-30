@@ -126,13 +126,57 @@
    const exportBtn=document.getElementById('fusion-batch-report');if(exportBtn)exportBtn.disabled=false;
   }
  }
+ function validateBatchCheckpoint(raw,ctx){
+  if(!raw||raw.format!=='BNCR-ZPOT-ORACLE-BATCH-v1'||raw.status!=='paused')
+   throw Error('Solo puede continuarse una auditoría batch detenida de manera controlada. Los estados inciertos requieren conciliación manual.');
+  if(raw.endpoint!==pubUrlTemplate(PUB.url)||raw.sources?.existing!==ctx.oldSha||raw.sources?.incoming!==ctx.newSha)
+   throw Error('El JSON no corresponde al mismo destino ni a los mismos ZIP.');
+  if(raw.total!==ctx.delta.totals.totalWrites||!Number.isInteger(raw.confirmed)||raw.confirmed<0||
+    !Array.isArray(raw.batches)||!raw.completed||!raw.mappings)
+   throw Error('Auditoría incompleta o cantidades distintas del diferencial.');
+  const allowable=new Map(ctx.delta.operations.map(op=>[op.object+'/'+op.id,op.action]));
+  const processed=new Set(),idsByTable={},mappingByTable={};
+  let count=0;
+  for(const batch of raw.batches){
+   if(!Array.isArray(batch.operations)||!Array.isArray(batch.ids))throw Error('Lote sin operaciones confirmadas.');
+   for(const op of batch.operations){
+    const key=batch.table+'/'+op.sourceId;
+    if(!allowable.has(key)||processed.has(key)||allowable.get(key)!==op.action||
+      !/^[A-Za-z0-9._~-]+$/.test(String(op.oracleId)))
+     throw Error('Identidad de registro confirmada inválida en la auditoría: '+key);
+    processed.add(key);count++;
+    (idsByTable[batch.table]??=[]).push(op.sourceId);
+    (mappingByTable[batch.table]??={})[op.sourceId]=op.oracleId;
+   }
+  }
+  if(count!==raw.confirmed||JSON.stringify(idsByTable)!==JSON.stringify(raw.completed)||
+    JSON.stringify(mappingByTable)!==JSON.stringify(raw.mappings))
+   throw Error('Las equivalencias o los conteos confirmados no coinciden con los lotes del JSON.');
+  return raw;
+ }
+ async function importBatch(file){
+  const ctx=info();
+  if(!ctx?.delta||ctx.busy)throw Error('Analiza los ZIP y detén cualquier publicación antes de importar el JSON.');
+  if(ctx.report)throw Error('Ya hay un intento de publicación en memoria. Descarga su auditoría antes de cambiarla.');
+  if(file.size>20*1024*1024)throw Error('JSON batch demasiado grande (máximo 20 MB).');
+  const saved=validateBatchCheckpoint(JSON.parse(await file.text()),ctx);
+  set({batchReport:saved,batchSize:saved.configuration.size,
+   batchConcurrency:saved.configuration.concurrency,batchChecked:false},true);
+  report('Recuperados '+saved.confirmed+'/'+saved.total+' registros confirmados. Verifica GET y vuelve a autorizar el resto de la carga.');
+ }
  document.addEventListener('change',e=>{
   const x=e.target;if(section!=='fusionar')return;
+  if(x.id==='fusion-batch-file'){
+   const file=x.files?.[0];if(!file)return;
+   importBatch(file).catch(e=>report('No se pudo recuperar el batch: '+e.message,true)).finally(()=>{x.value='';});
+   return;
+  }
   if(x.id==='fusion-batch-size')set({batchSize:Number(x.value),batchChecked:false});
   if(x.id==='fusion-batch-concurrency')set({batchConcurrency:Number(x.value)});
  });
  document.addEventListener('click',e=>{
   const button=e.target.closest('button');if(!button||section!=='fusionar')return;
+  if(button.id==='fusion-batch-import')document.getElementById('fusion-batch-file')?.click();
   if(button.id==='fusion-batch-verify')verify();
   if(button.id==='fusion-batch-start')publish();
   if(button.id==='fusion-batch-stop'){
