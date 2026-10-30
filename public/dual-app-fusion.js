@@ -2,7 +2,7 @@
    Runs locally against ZIPs already loaded by the explorer. */
 (function(){
  'use strict';
- const F={oldIndex:-1,newIndex:-1,preview:null,signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false};
+ const F={oldIndex:-1,newIndex:-1,preview:null,signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false,detailTable:''};
  const safe=(value)=>esc(String(value??''));
  const name=(index)=>D[index]?nominal(D[index]):'No seleccionado';
  const choices=(current,exclude)=>'<option value="-1">Selecciona un ZIP…</option>'+
@@ -54,6 +54,10 @@
     ${m.blocking?'<div class="notice danger"><strong>Existen incidencias que requieren revisión.</strong> Se permite exportar un ZIP de diagnóstico, pero no prepararlo para publicación hasta resolver las referencias y los conflictos.</div>':'<div class="notice success"><strong>Prevalidación sin errores bloqueantes.</strong> Revisa igualmente las reglas de identidad y el esquema del destino antes de publicar.</div>'}
     <div class="search-line"><input id="fusion-filter" placeholder="Filtrar BO por nombre" value="${safe(F.filter)}"/><label class="check-inline"><input id="fusion-only-issues" type="checkbox" ${F.issuesOnly?'checked':''}/> Solo con incidencias</label></div>
     <div id="fusion-tables">${tablesHtml(result)}</div>
+    <label class="block-label">Previsualizar filas y columnas de un BO
+     <select id="fusion-detail-object">${result.reports.map(r=>'<option value="'+safe(r.name)+'" '+((F.detailTable||result.reports[0]?.name)===r.name?'selected':'')+'>'+safe(r.name)+' · '+fmt(r.resultRows)+' filas</option>').join('')}</select>
+    </label>
+    <div id="fusion-detail-result">${detailHtml(result)}</div>
     ${result.issues.length?'<details><summary>Ver primeras incidencias ('+fmt(result.issues.length)+')</summary><div class="table-wrap"><table><thead><tr><th>Severidad</th><th>BO</th><th>Origen</th><th>ID</th><th>Motivo</th></tr></thead><tbody>'+
      result.issues.slice(0,120).map(i=>'<tr><td>'+safe(i.severity)+'</td><td><code>'+safe(i.table)+'</code></td><td>'+safe(i.source)+'</td><td>'+safe(i.id)+'</td><td>'+safe(i.message)+'</td></tr>').join('')+
      '</tbody></table></div></details>':''}`);
@@ -73,6 +77,16 @@
      <p class="footnote">La publicación es una operación separada. El ZIP generado no borra datos y no implica que los conflictos de unicidad del destino estén resueltos; el publicador debe validarlos contra Oracle.</p>`);
   }
   return html;
+ }
+ function detailHtml(result){
+  const name=F.detailTable||result.reports[0]?.name;
+  const data=result.tables[name];
+  if(!data)return '<div class="empty">No hay registros para previsualizar.</div>';
+  const columns=data.columns.slice(0,12),rows=data.rows.slice(0,20);
+  return '<div class="table-wrap"><table><thead><tr>'+columns.map(c=>'<th>'+safe(c)+'</th>').join('')+
+   '</tr></thead><tbody>'+rows.map(row=>'<tr>'+columns.map(c=>'<td>'+safe(String(row[c]??'').slice(0,180))+'</td>').join('')+'</tr>').join('')+
+   '</tbody></table></div><div class="footnote">Vista previa local: '+rows.length+' de '+fmt(data.rows.length)+' filas de '+safe(name)+
+   '. Se muestran hasta 12 columnas; descarga el ZIP para revisar la tabla completa.</div>';
  }
  function tablesHtml(result){
   const items=result.reports.filter(r=>(!F.filter||r.name.toLowerCase().includes(F.filter.toLowerCase()))&&
@@ -181,6 +195,7 @@
    F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);F.preview=null;renderPage();
   }
   if(x.id==='fusion-destination'){F.destination=x.value;renderPage();}
+  if(x.id==='fusion-detail-object'&&F.preview){F.detailTable=x.value;document.getElementById('fusion-detail-result').innerHTML=detailHtml(F.preview);}
   if(x.id==='fusion-only-issues'){F.issuesOnly=x.checked;document.getElementById('fusion-tables').innerHTML=tablesHtml(F.preview);}
  });
  document.addEventListener('input',e=>{
