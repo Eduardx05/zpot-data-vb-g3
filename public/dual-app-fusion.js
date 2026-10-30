@@ -82,7 +82,7 @@
       ${F.destination==='oracle'?'<button class="btn btn-primary" id="fusion-publish" '+(m.blocking||F.busy||!F.baselineConfirmed||!F.delta?.totals.totalWrites?'disabled':'')+'>Preparar solo cambios en Oracle</button>':''}
      </div>
      <p class="footnote">La publicación es una operación separada. El ZIP generado no borra datos y no implica que los conflictos de unicidad del destino estén resueltos; el publicador debe validarlos contra Oracle.</p>`);
-    ${F.destination==='oracle'?block('5 · Enviar por Oracle API Batch (solo diferencias)',`
+    if(F.destination==='oracle')html+=block('5 · Enviar por Oracle API Batch (solo diferencias)',`
       <div class="notice"><strong>API batch oficial:</strong> agrupa 10 registros por solicitud (configurable) y permite hasta 3 solicitudes simultáneas. Se respetan las etapas padre-hijo; Oracle confirma o revierte cada lote completo.</div>
       <div class="settings-grid">
        <label>Registros por lote<select id="fusion-batch-size"><option value="5" ${F.batchSize===5?'selected':''}>5</option><option value="10" ${F.batchSize===10?'selected':''}>10 (recomendado)</option><option value="25" ${F.batchSize===25?'selected':''}>25</option></select></label>
@@ -100,7 +100,7 @@
       </div>
       <div id="fusion-batch-progress" class="notice">${F.batchReport?'Confirmados: '+fmt(F.batchReport.confirmed)+' / '+fmt(d.totalWrites)+'. Estado: '+safe(F.batchReport.status):'No hay lotes enviados todavía.'}</div>
       <p class="footnote">Si Oracle devuelve timeout, HTTP 5xx o una respuesta batch incompleta, se detendrá sin reintentar automáticamente. Conserva el JSON para verificar los IDs confirmados.</p>
-     `):''}
+     `);
   }
   return html;
  }
