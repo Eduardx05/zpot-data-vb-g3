@@ -61,8 +61,8 @@ function buildHtml(): string {
 }
 html = buildHtml();
 
-function send(res: ServerResponse, status: number, payload: string, type='application/json; charset=utf-8'): void {
-  res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"frame-ancestors 'none'"});
+function send(res: ServerResponse, status: number, payload: string, type='application/json; charset=utf-8',extraHeaders:Record<string,string>={}): void {
+  res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"frame-ancestors 'none'",...extraHeaders});
   res.end(payload);
 }
 function json(res:ServerResponse,status:number,data:unknown):void {send(res,status,JSON.stringify(data));}
@@ -122,7 +122,22 @@ async function oracle(req:IncomingMessage,res:ServerResponse,url:URL):Promise<vo
     if(response.length>4*1024*1024)return json(res,502,{error:'Respuesta de Oracle demasiado grande.'});
     const ct=r.headers.get('content-type')||'';
     if(!/json/i.test(ct) && /^\s*</.test(response))return json(res,502,{error:'Oracle devolvió HTML en vez de JSON; revisa permisos y autenticación.'});
-    send(res,r.status,response||'{}','application/json; charset=utf-8');
+    const exposedHeaders:Record<string,string>={};
+    // Some Oracle BO POST responses return 201 + Location but omit body.id.
+    // Extract only the final safe identifier, never expose the Location URL.
+    if(method==='POST' && r.ok){
+      const location=r.headers.get('location');
+      if(location)try{
+        const u=new URL(location,upstream);
+        const collection=ORACLE_PATH+'/'+match[1]+'/';
+        if(u.origin===ORACLE_BASE.origin&&u.pathname.startsWith(collection)){
+          const suffix=u.pathname.slice(collection.length);
+          if(/^[A-Za-z0-9._~-]+$/.test(suffix))
+            exposedHeaders['X-ZPOT-Oracle-Id']=suffix;
+        }
+      }catch{/* Invalid or unrelated Location is not trusted. */}
+    }
+    send(res,r.status,response||'{}','application/json; charset=utf-8',exposedHeaders);
   } catch(e){json(res,502,{error:e instanceof Error&&e.name==='AbortError'?'Tiempo de espera agotado en Oracle.':'No se pudo establecer conexión segura con Oracle.'});}
   finally{clearTimeout(timeout);}
 }
