@@ -21,7 +21,7 @@
   const el=document.getElementById('fusion-status');
   if(el){el.textContent=message;el.className='notice'+(error?' danger':'');}
  }
- function render(){
+ function renderFusion(){
   const good=valid(),result=F.preview&&F.signature===signature()?F.preview:null;
   const note='<div class="notice"><strong>Flujo independiente.</strong> Esta página no cambia la publicación existente. Los dos ZIP se leen localmente; se crea un tercer ZIP y su auditoría sin modificar los originales ni escribir en Oracle. Los conflictos de identidad y las referencias sin resolver bloquean el envío directo.</div>';
   let html=pagehead('Fusionar dos aplicaciones Oracle','Consolida catálogos de la versión antigua con Cases y cambios recientes de la versión nueva. Conserva las relaciones por ID y permite elegir dónde depositar el resultado.')+note;
@@ -195,5 +195,5 @@
   if(b.id==='fusion-json'){try{downloadJSON('BNCR_FUSION_AUDITORIA_'+new Date().toISOString().slice(0,10)+'.json',audit());}catch(err){status(err.message,true);}}
   if(b.id==='fusion-publish')preparePublication();
  });
- window.ZPOTDualFusionUI={render,analyze,exportZip};
+ window.ZPOTDualFusionUI={render:renderFusion,analyze,exportZip};
 })();
