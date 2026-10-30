@@ -319,7 +319,7 @@ function renderPublish(){
  block('3 · Plan de carga por relaciones y dependencias',pubPlanMarkup(selectedPlan))+
  block('Mapa visual · Dependencias entre objetos',pubRelationDiagram(PUB.mapScope==='master'?pubFullMasterPlan():selectedPlan))+
  block('3 · Límites y compatibilidad de datos',`<div class="settings-grid"><label>Máximo de registros por objeto en esta ejecución<select id="pub-limit">${[['1','1 (prueba mínima)'],['5','5 (prueba inicial recomendada)'],['25','25'],['100','100'],['500','500'],['1000','1000'],['ALL','TODOS (requiere confirmación reforzada)']].map(([x,lab])=>`<option value="${x}" ${PUB.limit===x?'selected':''}>${lab}</option>`).join('')}</select></label><label>Intervalo entre llamadas (ms)<input type="number" id="pub-delay" min="0" max="5000" value="${PUB.sleepMs}"/></label></div><div class="pub-flags"><label class="check-inline"><input id="pub-id" type="checkbox" ${PUB.preserveIds?'checked':''}/> Intentar conservar <code>id</code> original (requiere que el API lo permita)</label><label class="check-inline"><input id="pub-empty" type="checkbox" ${PUB.includeEmpty?'checked':''}/> Enviar campos vacíos como <code>null</code> (puede borrar valores con PATCH)</label><label class="check-inline"><input id="pub-skip-conflicts" type="checkbox" ${PUB.skipConflicts?'checked':''}/> Ante errores de fila (unicidad, validación, relación faltante), omitir y continuar con las independientes; usar ID del registro Oracle cuando se pueda conciliar con seguridad.</label></div><div class="actions"><button class="btn" id="pub-map-import" ${PUB.busy?'disabled':''}>Importar equivalencias de IDs (auditoría JSON)</button><button class="btn" id="pub-map-clear" ${PUB.restoredCount?'':'disabled'}>Limpiar equivalencias importadas</button><input type="file" id="pub-map-file" accept=".json,application/json" hidden/></div><div class="notice"><strong>Control de ID origen → ID Oracle:</strong> ${PUB.restoredCount?PUB.restoredCount+' equivalencias importadas de '+esc(PUB.restoredFrom):'Sin equivalencias importadas. Si Oracle generó IDs nuevos en una migración anterior, carga aquí su auditoría JSON para evitar duplicados.'} El mapa solo se conserva en esta sesión del navegador y debe corresponder al mismo endpoint.</div><p class="micro"><strong>Asociación automática por ID:</strong> el publicador consulta cada ID original, actualiza si existe y crea si Oracle confirma 404. Cuando Oracle asigna un ID nuevo, el mapa de equivalencias se utiliza para las referencias de los objetos hijos en la misma sesión. <strong>Guarda el reporte de auditoría antes de recargar:</strong> una ejecución nueva no podrá deducir automáticamente los IDs asignados en una ejecución anterior. Nunca se relacionan registros por nombre.</p><p class="micro">Se omiten los campos de auditoría (<code>creationDate</code>, <code>lastUpdateDate</code>, etc.). Se convierten los tipos booleanos y numéricos. <strong>Si Oracle genera nuevos IDs, las referencias entre objetos no se reasignan automáticamente:</strong> validar relaciones antes de cargas de múltiples tablas.</p><div class="actions"><button class="btn" id="pub-preview">Preparar vista previa sin enviar datos</button><button class="btn" id="pub-json-preview">Descargar vista previa JSON (primer objeto)</button></div><div id="pub-preview-result" class="pub-preview-placeholder">Primero elige objetos, después prepara la vista previa.</div>`)+
- block('4 · Autorizar publicación y auditar',`<div class="notice danger"><strong>Solo publicación de pruebas del servidor OIC Desarrollo.</strong> No publiques este HTML en un sitio público: incluye datos precargados del BNCR. <strong>Configuration:</strong> esta prueba autoriza incluir todos sus registros, incluso claves con URL_APP, servidores o parámetros de otros ambientes. Se avisará la cantidad antes de enviar y quedará constancia en la auditoría. Verifica las configuraciones del destino después de la migración. El modo POST no verifica automáticamente si el registro ya existe en el destino. Confirma respaldo y que esta publicación de OIC Desarrollo no contiene datos productivos. No existe transacción única ni rollback automático: una falla podría dejar una carga parcial.</div><label class="check-inline" style="max-width:none"><input id="pub-ack" type="checkbox" ${PUB.approved?'checked':''}/> Confirmo que este LIVE pertenece a OIC Desarrollo (NO producción del banco), tengo respaldo, permisos y esquema revisados; acepto el riesgo de carga parcial y duplicados.</label><label class="block-label">Escribe <code>CARGAR DESARROLLO</code> para activar el envío<input id="pub-confirm-phrase" autocomplete="off" spellcheck="false" placeholder="CARGAR DESARROLLO"/></label><div class="actions"><button class="btn btn-primary" id="pub-send" ${PUB.busy?'disabled':''}>Enviar registros seleccionados por API</button><button class="btn" id="pub-stop" ${PUB.busy?'':'disabled'}>Detener tras solicitud actual</button><button class="btn" id="pub-report" ${PUB.results?'':'disabled'}>Descargar reporte JSON</button><button class="btn" id="pub-reset">Restablecer plan (sin rollback)</button></div><div class="progress"><div id="pub-progress" class="progress-fill" style="width:0%"></div></div><div id="pub-status" class="notice">No se han enviado datos desde esta sesión.</div><div id="pub-log" class="pub-log" aria-live="polite">${PUB.results?esc(JSON.stringify({total:PUB.results.total,success:PUB.results.success,skipped:PUB.results.skipped,failed:PUB.results.failed},null,2)):'La publicación se registrará aquí.'}</div>`)+
+ block('4 · Autorizar publicación y auditar',`<div class="notice danger"><strong>Solo publicación de pruebas del servidor OIC Desarrollo.</strong> No publiques este HTML en un sitio público: incluye datos precargados del BNCR. <strong>Configuration:</strong> esta prueba autoriza incluir todos sus registros, incluso claves con URL_APP, servidores o parámetros de otros ambientes. Se avisará la cantidad antes de enviar y quedará constancia en la auditoría. Verifica las configuraciones del destino después de la migración. El modo POST no verifica automáticamente si el registro ya existe en el destino. Confirma respaldo y que esta publicación de OIC Desarrollo no contiene datos productivos. No existe transacción única ni rollback automático: una falla podría dejar una carga parcial.</div><label class="check-inline" style="max-width:none"><input id="pub-ack" type="checkbox" ${PUB.approved?'checked':''}/> Confirmo que este LIVE pertenece a OIC Desarrollo (NO producción del banco), tengo respaldo, permisos y esquema revisados; acepto el riesgo de carga parcial y duplicados.</label><label class="block-label">Escribe <code>CARGAR DESARROLLO</code> para activar el envío<input id="pub-confirm-phrase" autocomplete="off" spellcheck="false" placeholder="CARGAR DESARROLLO"/></label><div class="actions"><button class="btn btn-primary" id="pub-send" ${PUB.busy?'disabled':''}>Enviar registros seleccionados por API</button><button class="btn" id="pub-stop" ${PUB.busy?'':'disabled'}>Detener tras solicitud actual</button><button class="btn" id="pub-report" ${PUB.results?'':'disabled'}>Descargar reporte JSON</button><button class="btn btn-primary" id="pub-save-checkpoint" ${PUB.stageSession&&!PUB.busy?'':'disabled'}>Guardar JSON de reanudación</button><button class="btn" id="pub-load-checkpoint" ${PUB.busy?'disabled':''}>Continuar desde JSON</button><input type="file" id="pub-checkpoint-file" accept=".json,application/json" hidden/><button class="btn" id="pub-reset">Restablecer plan (sin rollback)</button></div><div class="progress"><div id="pub-progress" class="progress-fill" style="width:0%"></div></div><div id="pub-status" class="notice">No se han enviado datos desde esta sesión.</div><div id="pub-log" class="pub-log" aria-live="polite">${PUB.results?esc(JSON.stringify({total:PUB.results.total,success:PUB.results.success,skipped:PUB.results.skipped,failed:PUB.results.failed},null,2)):'La publicación se registrará aquí.'}</div>`)+
  `<p class="footnote">Se requiere HTTPS, autorización y permisos de escritura en los Business Objects. Las solicitudes se envían secuencialmente al proxy local Node.js; éste se autentica con Oracle mediante Public o Bearer configurado en .env. No se almacenan contraseñas ni tokens en el HTML o JSON.</p>`;
 }
 function pubFromInputs(){let u=$('pub-url');if(u&&u.value!==PUB.url){PUB.url=u.value.trim();PUB.testPassed=false}let a=$('pub-auth');if(a&&a.value!==PUB.auth){PUB.auth=a.value;PUB.testPassed=false}let t=$('pub-test-object');if(t&&t.value.trim()!==PUB.testObject){PUB.testObject=t.value.trim();PUB.testPassed=false}if($('pub-mode'))PUB.mode=$('pub-mode').value;if($('pub-limit'))PUB.limit=$('pub-limit').value;if($('pub-delay'))PUB.sleepMs=Math.min(5000,Math.max(0,Number($('pub-delay').value)||0));PUB.preserveIds=!!$('pub-id')?.checked;PUB.includeEmpty=!!$('pub-empty')?.checked;PUB.skipConflicts=!!$('pub-skip-conflicts')?.checked;PUB.approved=!!$('pub-ack')?.checked;}
@@ -538,7 +538,7 @@ async function pubResumeFromJson(raw){
  if(!Array.isArray(state.tables)||state.tables.some(t=>typeof t!=='string')||!['sync','update'].includes(state.mode))
   throw Error('La recuperación por ID solo es compatible con PATCH o sincronización segura.');
  if(!['1','5','25','100','500','1000','ALL'].includes(String(state.limit))||
-    !['base','union','intersection'].includes(state.schemaMode)||typeof state.includeMode!=='string')
+    !['reference','union','intersection'].includes(state.schemaMode)||typeof state.includeMode!=='string')
   throw Error('Configuración de consolidación incompatible con este JSON.');
  if(!state.preserveIds)throw Error('El punto de recuperación no conserva los IDs originales.');
  // Restore the exact read-only plan configuration first; no request is sent.
@@ -600,7 +600,8 @@ async function pubSend(){
  try{
    const base=pubUrlTemplate(PUB.url),plan=pubGetPlan(),tables=pubSelectedTables(),signature=pubRunSignature();
    if(!tables.length)throw Error('Selecciona al menos un Business Object.');
-   if(!PUB.approved||$('pub-confirm-phrase')?.value!=='CARGAR DESARROLLO')throw Error('Confirma el respaldo y escribe CARGAR DESARROLLO exactamente.');
+   if(!session?.authorized&&(!PUB.approved||$('pub-confirm-phrase')?.value!=='CARGAR DESARROLLO'))
+     throw Error('Confirma el respaldo y escribe CARGAR DESARROLLO exactamente una vez para este plan.');
    if(!PUB.testPassed||PUB.testedUrl!==base||PUB.testedAuth!==PUB.auth)throw Error('Primero verifica la lectura GET con la URL y autenticación elegidas.');
    if(PUB.mode!=='create'&&!PUB.preserveIds)throw Error('PATCH y Upsert requieren conservar los ID originales.');
    if(!pubIsConfirmedDevTarget(base))throw Error('Este publicador solo permite OIC Desarrollo Gen 3 V2.');
@@ -654,6 +655,7 @@ async function pubSend(){
      pubLog('↪ Reanudando etapa '+(session.cursor.stageIndex+1)+', BO '+(plan.stages[session.cursor.stageIndex]?.[session.cursor.tableIndex]||'?')+
        ', fila '+(session.cursor.rowIndex+1)+'. No se repetirán filas confirmadas ni omitidas.');
    }
+   session.authorized=true;
    PUB.busy=true;PUB.stop=false;
    const sendBtn=$('pub-send');if(sendBtn)sendBtn.disabled=true;
    const stopBtn=$('pub-stop');if(stopBtn)stopBtn.disabled=false;
@@ -790,6 +792,7 @@ async function pubSend(){
            }
          }
          session.cursor={stageIndex,tableIndex,rowIndex:rowIndex+1};
+         pubRefreshCheckpoint(session);
          const processed=report.success+report.failed+report.skipped;
          const bar=$('pub-progress');if(bar)bar.style.width=(100*processed/Math.max(1,report.total)).toFixed(1)+'%';
          pubSetStatus(`Etapa ${stageIndex+1}/${plan.stages.length}: ${fmt(report.success)} enviados / ${fmt(report.total)} planificados. ${t}`);
@@ -800,11 +803,12 @@ async function pubSend(){
      stageReport.finishedAt=new Date().toISOString();stageReport.status=stageReport.skipped?'completed-with-omissions':'completed';
      session.nextStage=stageIndex+1;
      session.cursor={stageIndex:stageIndex+1,tableIndex:0,rowIndex:0};
+     pubRefreshCheckpoint(session);
      pubLog('✓ Etapa '+(stageIndex+1)+' finalizada: '+stageReport.success+' enviados, '+stageReport.skipped+' omitidos. '+(PUB.stepMode?'Confirma la siguiente etapa cuando estés listo.':''));
    }
    const completed=session.nextStage>=plan.stages.length;
    if(completed){report.finishedAt=new Date().toISOString();report.outcome=report.skipped?'completed-with-omissions':'completed';}
-   report.idMappings=session.idMap.snapshot();
+   pubRefreshCheckpoint(session);
    PUB.results=report;
    pubSetStatus(completed?`Carga terminada${report.skipped?' con omisiones':''}: ${fmt(report.success)} registros enviados, ${fmt(report.skipped)} omitidos, ${fmt(report.failed)} fallidos. Descarga la auditoría para revisar cada fila omitida.`:`Etapa ${session.nextStage}/${plan.stages.length} terminada: ${fmt(report.success)} enviados, ${fmt(report.skipped)} omitidos. Continúa cuando confirmes la siguiente etapa.`,'ok');
    let reportBtn=$('pub-report');if(reportBtn)reportBtn.disabled=false;
@@ -818,9 +822,9 @@ async function pubSend(){
      session.report.finishedAt=undefined;
      session.report.resumeCursor={...session.cursor};
      session.report.errors.push({stage:session.nextStage+1,message:e.message,action:session.unsafeRetry?'manual-reconciliation':'resume'});
-     session.report.idMappings=session.idMap.snapshot();PUB.results=session.report;
+     pubRefreshCheckpoint(session);PUB.results=session.report;
    }
-   pubSetStatus('Carga detenida: '+e.message,'danger');
+   pubSetStatus('Carga pausada: '+e.message+' Descarga el JSON de reanudación para conservar el punto exacto.','danger');
    pubLog('Detenido: '+e.message);
    const b=$('pub-report');if(b&&PUB.results)b.disabled=false;
  }finally{
@@ -837,6 +841,11 @@ async function pubSend(){
 }
 
 $('main').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)return;
+ if(b.id==='pub-load-checkpoint'){if(!PUB.busy)$('pub-checkpoint-file')?.click();return}
+ if(b.id==='pub-save-checkpoint'){
+  if(!PUB.busy&&PUB.stageSession)pubDownloadCheckpoint(PUB.stageSession);
+  return;
+ }
  if(b.id==='pub-map-import'){if(!PUB.busy)$('pub-map-file')?.click();return}
  if(b.id==='pub-map-clear'){
   if(PUB.busy||PUB.stageSession?.report?.success){pubSetStatus('Descarga la auditoría y restablece el plan antes de cambiar las equivalencias.','danger');return}
@@ -870,9 +879,18 @@ $('main').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)re
  if(b.id==='pub-send'){pubSend();return}
  if(b.id==='pub-stop'){PUB.stop=true;pubSetStatus('Detención solicitada: terminará la llamada actual y no iniciará la siguiente.');return}
  if(b.id==='pub-reset'){if(PUB.busy)return;const started=!!PUB.stageSession?.report?.success; if(started&&!window.confirm('Ya se enviaron registros a Oracle. Restablecer el plan NO los elimina ni revierte. Verifica IDs y concilia la carga antes de repetir. ¿Continuar?'))return;PUB.stageSession=null;PUB.results=null;render();setMsg('Plan reiniciado; no se efectuó rollback en Oracle.','warn');return}
- if(b.id==='pub-report'&&PUB.results){downloadJSON('BNCR_AUDITORIA_ENVIO_ORACLE_'+new Date().toISOString().slice(0,10)+'.json',PUB.results);return}
+ if(b.id==='pub-report'&&PUB.results){if(PUB.stageSession)pubRefreshCheckpoint(PUB.stageSession);downloadJSON('BNCR_AUDITORIA_ENVIO_ORACLE_'+new Date().toISOString().slice(0,10)+'.json',PUB.results);return}
 });
 $('main').addEventListener('change',async e=>{let x=e.target;
+ if(x.id==='pub-checkpoint-file'){
+  const file=x.files?.[0];if(!file)return;
+  try{
+   if(file.size>75*1024*1024)throw Error('JSON de recuperación demasiado grande (máximo 75 MB).');
+   await pubResumeFromJson(JSON.parse(await file.text()));
+  }catch(error){pubSetStatus('No se pudo continuar desde JSON: '+error.message,'danger');}
+  finally{x.value='';}
+  return;
+ }
  if(x.id==='pub-map-file'){
   const file=x.files?.[0];if(!file)return;
   try{
