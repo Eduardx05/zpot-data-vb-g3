@@ -193,7 +193,7 @@
   return tables;
  }
  async function analyze(){
-  if(F.busy)return;
+  if(F.busy||F.batchBusy)return;
   if(!valid())return status('Selecciona dos ZIP diferentes (antiguo y nuevo).',true);
   if(!window.ZPOTDualAppMerge)throw Error('Falta el motor de fusión. Ejecuta npm run build y recarga.');
   F.busy=true;F.preview=null;status('Iniciando análisis de los dos ZIP…');
@@ -211,6 +211,8 @@
   finally{F.busy=false;const b=document.getElementById('fusion-analyze');if(b)b.disabled=false;}
  }
  function recalculate(){
+  if(F.batchBusy)throw Error('No se puede cambiar la conciliación mientras Oracle ejecuta lotes.');
+  F.batchChecked=false;
   if(!F.inputs||!window.ZPOTDualAppMerge||!window.ZPOTOracleMergeDelta)
    throw Error('No se ha cargado el motor de fusión/diferencias. Ejecuta npm run build.');
   const merged=window.ZPOTDualAppMerge.merge({...F.inputs,decisions:F.decisions});
@@ -311,7 +313,7 @@
   if(x.id==='fusion-old'||x.id==='fusion-new'){
    F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);
    F.preview=null;F.delta=null;F.inputs=null;F.decisions={};
-   F.baselineConfirmed=false;renderPage();return;
+   F.baselineConfirmed=false;F.batchChecked=false;F.batchReport=null;renderPage();return;
   }
   if(x.id==='fusion-baseline-confirm'){F.baselineConfirmed=x.checked;renderPage();return;}
   if(x.id==='fusion-destination'){F.destination=x.value;renderPage();return;}
@@ -386,5 +388,16 @@
    return;
   }
  });
- window.ZPOTDualFusionUI={render:renderFusion,analyze,exportZip};
+ window.ZPOTDualFusionUI={
+  render:renderFusion,analyze,exportZip,
+  getBatchData:()=>({inputs:F.inputs,preview:F.preview,delta:F.delta,baselineConfirmed:F.baselineConfirmed,
+   destination:F.destination,signature:F.signature,currentSignature:signature(),
+   oldSha:D[F.oldIndex]?.sha,newSha:D[F.newIndex]?.sha,
+   size:F.batchSize,concurrency:F.batchConcurrency,verified:F.batchChecked,
+   busy:F.batchBusy,stop:F.batchStop,report:F.batchReport}),
+  updateBatch:(updates,refresh=false)=>{
+   Object.assign(F,updates);
+   if(refresh)renderPage();
+  }
+ };
 })();
