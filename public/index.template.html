@@ -174,7 +174,7 @@ async function pubFindUnique(table,payload,base){
     const result=(await pubFetch(pubEndpoint(base,table)+'?limit=200&q='+encodeURIComponent(q))).json;
     consume(result?.items);
     // q may be ignored by some Oracle endpoints; validate the returned rows.
-    if(result.hasMore===false&&result.items.every(same))complete=true;
+    if(result.hasMore===false&&result.items.length>0&&result.items.every(same))complete=true;
    }catch(error){
     // Some BO runtimes do not support q; use read-only pagination instead.
     if(error.status!==400&&error.status!==422)throw error;
