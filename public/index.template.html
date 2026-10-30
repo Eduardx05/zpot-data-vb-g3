@@ -140,8 +140,13 @@ const PUB_UNIQUE_FIELDS={
  Users:[{name:'cases',type:'number'}],
  Zones:[{name:'cases',type:'number'}]
 };
-async function pubFindUnique(table,payload,base){
- const fields=PUB_UNIQUE_FIELDS[table]||[];
+function pubCanonicalUniqueText(value){
+ return String(value).normalize('NFC').trim().replace(/\s+/g,' ').toLocaleLowerCase('es');
+}
+// Relaxed comparison is only allowed AFTER Oracle explicitly reports a
+// uniquenessViolation on the declared field; never for ordinary existence checks.
+async function pubFindUnique(table,payload,base,mode='exact',conflictingField=''){
+ const fields=(PUB_UNIQUE_FIELDS[table]||[]).filter(f=>!conflictingField||f.name===conflictingField);
  if(!fields.length)return null;
  let agreed=null;
  for(const field of fields){
@@ -152,7 +157,7 @@ async function pubFindUnique(table,payload,base){
    const other=item[field.name];
    if(other===null||other===undefined)return false;
    if(field.type==='number')return String(other).trim()!==''&&Number.isFinite(Number(other))&&Number(other)===Number(value);
-   return String(other)===String(value);
+   return String(other)===String(value)||(mode==='normalized'&&pubCanonicalUniqueText(other)===pubCanonicalUniqueText(value));
   };
   const matches=new Set();
   const consume=items=>{
@@ -169,7 +174,7 @@ async function pubFindUnique(table,payload,base){
    "'"+String(value).replace(/'/g,"''")+"'";
   const q=literal===null?'':field.name+' = '+literal;
   let complete=false;
-  if(q&&q.length<=512){
+  if(mode==='exact'&&q&&q.length<=512){
    try{
     const result=(await pubFetch(pubEndpoint(base,table)+'?limit=200&q='+encodeURIComponent(q))).json;
     consume(result?.items);
@@ -373,7 +378,7 @@ async function pubFetch(url,options={}){
  const ct=res.headers.get('content-type')||'',body=await res.text();
  if(/<html|<!doctype/i.test(body.slice(0,400)) && !ct.includes('json'))throw Error('El proxy devolvió HTML en lugar de JSON.');
  let parsed=null;try{parsed=JSON.parse(body)}catch{}
- if(!res.ok){const detail=parsed?.['o:errorDetails']?.find(x=>typeof x?.detail==='string')?.detail;const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;err.oracleType=String(parsed?.type||'');throw err;}
+ if(!res.ok){const detail=parsed?.['o:errorDetails']?.find(x=>typeof x?.detail==='string')?.detail;const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;err.oracleType=String(parsed?.type||'');err.oracleDetail=String(detail||parsed?.detail||'');throw err;}
  return {json:parsed,status:res.status,headers:res.headers};
 }
 async function pubTest(){pubFromInputs();let btn=$('pub-test'),out=$('pub-test-result');try{
@@ -526,8 +531,11 @@ async function pubSend(){
            if(PUB.mode==='sync'){
              let matchedUnique=null;
              const uniqueFields=PUB_UNIQUE_FIELDS[t]||[];
-             const findUnique=uniqueFields.length?async()=>{
-               const matched=await pubFindUnique(t,payload,base);
+             const findUnique=uniqueFields.length?async(conflictingField='')=>{
+               if(conflictingField&&!uniqueFields.some(x=>x.name===conflictingField))
+                 throw Error('Oracle reportó unicidad en un campo no declarado para '+t+': '+conflictingField+'. Se requiere revisión manual.');
+               const matched=await pubFindUnique(t,payload,base,conflictingField?'normalized':'exact',conflictingField);
+               if(conflictingField&&!matched)throw Error('Oracle rechazó la clave única '+t+'.'+conflictingField+' pero no se encontró un único registro visible con GET (comparando texto normalizado). Revisa permisos de lectura y el valor existente en Oracle antes de reintentar.');
                if(matched){
                  const previousOwner=session.idMap.ownerOf(t,matched.id);
                  if(previousOwner&&previousOwner!==sourceId)
