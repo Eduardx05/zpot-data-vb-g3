@@ -14,6 +14,11 @@ function harness({relations={},reply=async()=>({status:200,json:{id:1}})}={}){
   pubRelationships:(names)=>Object.fromEntries(names.map(x=>[x,relations[x]||[]])),
   pubEndpoint:(base,table,id)=>base+'/'+table+(id===undefined?'':'/'+id),
   pubFetch:async url=>{calls.push(url);return reply(url);},
+  PUB_UNIQUE_FIELDS:{AbsenceTypeCatalogue:[{name:'absenceName',type:'string'}]},
+  pubPayload:(table,row)=>({...row}),
+  pubFindUnique:async()=>({id:'55',field:'absenceName'}),
+  pubRefreshCheckpoint:()=>{},
+  pubLog:()=>{},
   Error,Set,Map,String,Number,Array,Object,RegExp
  };
  runInNewContext(html.slice(start,end),ctx,{filename:'publisher-recovery.js'});
@@ -106,4 +111,50 @@ test('UI includes skip-conflicts switch and records omissions in audit',()=>{
  assert.match(html,/const references=await pubCheckRowReferences\(pack,r,session,base\)/);
  assert.doesNotMatch(html,/await pubCheckReferences\(session\.packs\.get\(t\)/);
  assert.match(html,/wroteToOracle&&?/, 'guard present before classifier');
+});
+
+test('skipped unique parent can be linked by the existing Oracle ID without POST/PATCH',async()=>{
+ const relations={AbsenceCatalogue:[{field:'absenceTypeCatalogue',target:'AbsenceTypeCatalogue'}]};
+ const {pubCheckRowReferences,calls}=harness({
+  relations,
+  reply:async url=>{
+   assert.equal(url,'https://oracle.test/AbsenceTypeCatalogue/55');
+   return {status:200,json:{id:55}};
+  }
+ });
+ const putCalls=[],mapping={};
+ const ctx={
+  successfulIds:new Map(),
+  skippedIds:new Map([['AbsenceTypeCatalogue',new Set(['1'])]]),
+  checkedReferences:new Set(),
+  packs:new Map([['AbsenceTypeCatalogue',{table:'AbsenceTypeCatalogue',cols:['id','absenceName'],rows:[{id:'1',absenceName:'Capacitación'}]}]]),
+  report:{skippedRecords:[{object:'AbsenceTypeCatalogue',id:'1',field:'absenceName',oracleType:'vbcs://businessObjects/data/uniquenessViolation'}]},
+  idMap:{
+   ownerOf:()=>undefined,
+   put:(table,source,oracle)=>{putCalls.push([table,source,oracle]);mapping[source]=oracle;},
+   get:(_,id)=>mapping[id]
+  },
+  nextStage:1
+ };
+ const checked=await pubCheckRowReferences({table:'AbsenceCatalogue',rows:[]},{id:'21',absenceTypeCatalogue:'1'},ctx,'https://oracle.test');
+ assert.equal(checked.validatedRemote,0);
+ assert.deepEqual(putCalls,[['AbsenceTypeCatalogue','1','55']]);
+ assert.ok(ctx.successfulIds.get('AbsenceTypeCatalogue').has('1'));
+ assert.equal(ctx.skippedIds.get('AbsenceTypeCatalogue').has('1'),false);
+ assert.deepEqual(JSON.parse(JSON.stringify(ctx.report.referenceResolutions)),[{
+  object:'AbsenceTypeCatalogue',originalId:'1',oracleId:'55',matchedByUnique:'absenceName',operation:'reference-only',stage:2
+ }]);
+ assert.deepEqual(calls,['https://oracle.test/AbsenceTypeCatalogue/55']);
+});
+
+test('ambiguous skipped parents remain omitted and do not get guessed IDs',async()=>{
+ const {pubCheckRowReferences}=harness({
+  relations:{AbsenceCatalogue:[{field:'absenceTypeCatalogue',target:'AbsenceTypeCatalogue'}]}
+ });
+ const ctx=session({skipped:[['AbsenceTypeCatalogue',['1']]],planned:{AbsenceTypeCatalogue:['1']}});
+ ctx.report={skippedRecords:[{object:'AbsenceTypeCatalogue',id:'1',field:'absenceName',oracleType:'vbcs://businessObjects/data/uniquenessViolation'}]};
+ // The skipped parent exists as a CSV row but no matching name was provided.
+ ctx.packs.get('AbsenceTypeCatalogue').cols=['id','absenceName'];
+ await assert.rejects(pubCheckRowReferences({table:'AbsenceCatalogue',rows:[]},{id:'21',absenceTypeCatalogue:'1'},ctx,'https://oracle.test'),
+  error=>error.skipRecord===true&&/omitido/.test(error.message));
 });
