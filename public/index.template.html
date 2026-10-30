@@ -472,7 +472,8 @@ async function pubSend(){
    if(plan.unplanned.length)throw Error('No es seguro importar: hay dependencias circulares o bloqueadas: '+plan.unplanned.join(', ')+'. Desmarca los objetos implicados y repite el plan.');
    if(!PUB.preserveIds && plan.edges.length && PUB.mode!=='update')throw Error('Hay llaves foráneas entre objetos seleccionados. Activa «Intentar conservar id original» antes de publicar; sin IDs estables no se pueden mantener las relaciones.');
    if(session && session.signature!==signature)throw Error('Cambiaste la selección o configuración desde que empezó la carga. Descarga el reporte y pulsa «Restablecer plan» antes de iniciar otro.');
-   if(session?.failed)throw Error('La etapa anterior falló o quedó parcialmente cargada. Descarga el reporte y concilia los registros antes de restablecer el plan.');
+   if(session?.failed&&(session.unsafeRetry||!session.cursor||!['sync','update'].includes(PUB.mode)))
+     throw Error('La etapa anterior puede tener una escritura sin confirmar. Descarga la auditoría y verifica los IDs en Oracle; no se repetirá automáticamente un POST incierto.');
    if(session && session.nextStage>=plan.stages.length)throw Error('Todas las etapas de este plan ya finalizaron. Para crear otro plan pulsa «Restablecer plan».');
    if(!session){
      if(PUB.limit==='ALL'&&!window.confirm('Se incluirán TODOS los registros seleccionados. ¿Confirmas que el destino es un ambiente aislado de desarrollo con respaldo?'))return;
@@ -502,19 +503,32 @@ async function pubSend(){
        pubLog('Configuration: '+configurationReview.total+' registros preparados, '+configurationReview.flaggedCount+' parámetros de ambiente identificados (solo advertencia).');
      }
      const report={format:'BNCR-ZPOT-Oracle-BO-API-v3',startedAt:new Date().toISOString(),url:base,mode:PUB.mode,preserveIds:PUB.preserveIds,environment:'OIC Desarrollo / aplicación publicada live',sources:[...consolidation].map(i=>({name:nominal(D[i]),filename:D[i].filename})),plan:{stages:plan.stages,edges:plan.edges,external:plan.external,selfReferences:plan.selfReferences},total:[...packs.values()].reduce((n,p)=>n+p.rows.length,0),success:0,created:0,updated:0,skipped:0,failed:0,stopped:false,stages:[],tables:[],operations:[],operationsTruncated:false,errors:[],skippedRecords:[],skippedTruncated:false,idMappings:{},configurationReview,skipConflicts:PUB.skipConflicts};
-     session={signature,plan,packs,report,nextStage:0,failed:false,successfulIds:new Map(),skippedIds:new Map(),checkedReferences:new Set(),idMap:window.ZPOTOracleIdTools.createRegistry()};
+     session={signature,plan,packs,report,nextStage:0,failed:false,unsafeRetry:false,
+       cursor:{stageIndex:0,tableIndex:0,rowIndex:0},successfulIds:new Map(),skippedIds:new Map(),
+       checkedReferences:new Set(),idMap:window.ZPOTOracleIdTools.createRegistry()};
      if(PUB.restoredMappings){session.idMap.load(PUB.restoredMappings);report.restoredMappings=PUB.restoredCount;}
      PUB.stageSession=session;PUB.results=report;
    }
    let start=session.nextStage,end=PUB.stepMode?Math.min(start+1,plan.stages.length):plan.stages.length;
    if(!window.confirm(`ENVÍO REAL A ORACLE DESARROLLO\nEtapa(s): ${start+1} a ${end} de ${plan.stages.length}\nTablas: ${plan.stages.slice(start,end).flat().join(', ')}\nModo: ${PUB.mode}\nRegistros por objeto: ${PUB.limit}${session.report.configurationReview&&plan.stages.slice(start,end).some(s=>s.includes('Configuration'))?'\nConfiguration: '+session.report.configurationReview.total+' registros, '+session.report.configurationReview.flaggedCount+' parámetros de ambiente (se incluyen tal cual)':''}\n\n¿Confirmas continuar con este tramo?`))return;
+   if(session.failed){
+     session.failed=false;
+     session.report.stopped=false;
+     session.report.finishedAt=undefined;
+     session.report.resumedAt=new Date().toISOString();
+     pubLog('↪ Reanudando etapa '+(session.cursor.stageIndex+1)+', BO '+(plan.stages[session.cursor.stageIndex]?.[session.cursor.tableIndex]||'?')+
+       ', fila '+(session.cursor.rowIndex+1)+'. No se repetirán filas confirmadas ni omitidas.');
+   }
    PUB.busy=true;PUB.stop=false;
    const sendBtn=$('pub-send');if(sendBtn)sendBtn.disabled=true;
    const stopBtn=$('pub-stop');if(stopBtn)stopBtn.disabled=false;
    const report=session.report;
    for(let stageIndex=start;stageIndex<end;stageIndex++){
-     const tablesAtStage=plan.stages[stageIndex],stageReport={stage:stageIndex+1,objects:tablesAtStage,status:'validating',startedAt:new Date().toISOString(),success:0,created:0,updated:0,failed:0,skipped:0,remoteReferencesChecked:0};
-     report.stages.push(stageReport);
+     const tablesAtStage=plan.stages[stageIndex];
+     const existingStage=report.stages.find(x=>x.stage===stageIndex+1&&x.status!=='completed'&&x.status!=='completed-with-omissions');
+     const stageReport=existingStage||{stage:stageIndex+1,objects:tablesAtStage,status:'validating',startedAt:new Date().toISOString(),success:0,created:0,updated:0,failed:0,skipped:0,remoteReferencesChecked:0};
+     if(!existingStage)report.stages.push(stageReport);
+     stageReport.status='validating';
      // Verify all current-stage collection endpoints and FK references before ANY write in this stage.
      pubSetStatus(`Validando relaciones antes de la etapa ${stageIndex+1}/${plan.stages.length}…`);
      for(const t of tablesAtStage){
@@ -523,15 +537,25 @@ async function pubSend(){
        // FK validation is per row so a single missing parent only omits its own descendants.
      }
      stageReport.status='sending';
-     for(const t of tablesAtStage){
+     for(let tableIndex=stageIndex===session.cursor.stageIndex?session.cursor.tableIndex:0;tableIndex<tablesAtStage.length;tableIndex++){
        if(PUB.stop)throw Error('Publicación detenida por el usuario.');
+       const t=tablesAtStage[tableIndex];
        const pack=session.packs.get(t);
-       const tab={name:t,stage:stageIndex+1,input:pack.input,unique:pack.unique,planned:pack.rows.length,succeeded:0,created:0,updated:0,failed:0,skipped:0};
-       report.tables.push(tab);pubLog(`Etapa ${stageIndex+1}/${plan.stages.length} · ${t}: ${pack.rows.length} fila(s)`);
-       for(const r of pack.rows){
+       const existingTab=report.tables.find(x=>x.stage===stageIndex+1&&x.name===t);
+       const tab=existingTab||{name:t,stage:stageIndex+1,input:pack.input,unique:pack.unique,planned:pack.rows.length,succeeded:0,created:0,updated:0,failed:0,skipped:0};
+       if(!existingTab)report.tables.push(tab);
+       const firstRow=stageIndex===session.cursor.stageIndex&&tableIndex===session.cursor.tableIndex?session.cursor.rowIndex:0;
+       pubLog('Etapa '+(stageIndex+1)+'/'+plan.stages.length+' · '+t+': '+pack.rows.length+' filas; desde fila '+(firstRow+1));
+       for(let rowIndex=firstRow;rowIndex<pack.rows.length;rowIndex++){
+         const r=pack.rows[rowIndex];
          if(PUB.stop)throw Error('Publicación detenida por el usuario.');
          const id=r.id;
-         if(PUB.mode!=='create'&&!id){tab.skipped++;report.skipped++;stageReport.skipped++;pubLog('Omitido '+t+': fila sin ID');continue;}
+         if(PUB.mode!=='create'&&!id){
+           tab.skipped++;report.skipped++;stageReport.skipped++;
+           pubLog('Omitido '+t+': fila sin ID');
+           session.cursor={stageIndex,tableIndex,rowIndex:rowIndex+1};
+           continue;
+         }
          let wroteToOracle=false;
          try{
            const references=await pubCheckRowReferences(pack,r,session,base);
@@ -630,14 +654,17 @@ async function pubSend(){
              throw Error('Fallo crítico en '+t+' (ID '+issue.id+'); se detuvo la carga para evitar corrupción de datos. '+issue.message);
            }
          }
+         session.cursor={stageIndex,tableIndex,rowIndex:rowIndex+1};
          const processed=report.success+report.failed+report.skipped;
          const bar=$('pub-progress');if(bar)bar.style.width=(100*processed/Math.max(1,report.total)).toFixed(1)+'%';
          pubSetStatus(`Etapa ${stageIndex+1}/${plan.stages.length}: ${fmt(report.success)} enviados / ${fmt(report.total)} planificados. ${t}`);
          if(PUB.sleepMs)await new Promise(resolve=>setTimeout(resolve,PUB.sleepMs));
        }
+       session.cursor={stageIndex,tableIndex:tableIndex+1,rowIndex:0};
      }
      stageReport.finishedAt=new Date().toISOString();stageReport.status=stageReport.skipped?'completed-with-omissions':'completed';
      session.nextStage=stageIndex+1;
+     session.cursor={stageIndex:stageIndex+1,tableIndex:0,rowIndex:0};
      pubLog('✓ Etapa '+(stageIndex+1)+' finalizada: '+stageReport.success+' enviados, '+stageReport.skipped+' omitidos. '+(PUB.stepMode?'Confirma la siguiente etapa cuando estés listo.':''));
    }
    const completed=session.nextStage>=plan.stages.length;
@@ -649,15 +676,28 @@ async function pubSend(){
    let nextBtn=$('pub-send');if(nextBtn)nextBtn.textContent=completed?'Plan finalizado':'Enviar etapa '+(session.nextStage+1)+' de '+plan.stages.length;
    let current=$('pub-stage-current');if(current)current.textContent=completed?'Todas las etapas completadas. Descarga el reporte JSON.':`Etapa ${session.nextStage} terminada. Siguiente: ${plan.stages[session.nextStage].join(', ')}`;
  }catch(e){
-   if(session){session.failed=true;session.report.stopped=true;session.report.finishedAt=new Date().toISOString();session.report.errors.push({stage:session.nextStage+1,message:e.message});session.report.idMappings=session.idMap.snapshot();PUB.results=session.report;}
+   if(session){
+     session.failed=true;session.report.stopped=true;
+     session.report.outcome=session.unsafeRetry?'manual-reconciliation-required':'paused';
+     session.report.pausedAt=new Date().toISOString();
+     session.report.finishedAt=undefined;
+     session.report.resumeCursor={...session.cursor};
+     session.report.errors.push({stage:session.nextStage+1,message:e.message,action:session.unsafeRetry?'manual-reconciliation':'resume'});
+     session.report.idMappings=session.idMap.snapshot();PUB.results=session.report;
+   }
    pubSetStatus('Carga detenida: '+e.message,'danger');
    pubLog('Detenido: '+e.message);
    const b=$('pub-report');if(b&&PUB.results)b.disabled=false;
  }finally{
    PUB.busy=false;const b=$('pub-send');if(b)b.disabled=false;
    const stop=$('pub-stop');if(stop)stop.disabled=true;
-   PUB.approved=false;const ack=$('pub-ack');if(ack)ack.checked=false;
-   const phrase=$('pub-confirm-phrase');if(phrase)phrase.value='';
+   // Keep the authorization controls for this in-memory plan so the user may
+   // click "Reanudar" after a recoverable error without retyping the phrase.
+   // Every subsequent batch still requires its own explicit confirm dialog.
+   if(session?.nextStage>=session?.plan?.stages?.length||session?.unsafeRetry){
+     PUB.approved=false;const ack=$('pub-ack');if(ack)ack.checked=false;
+     const phrase=$('pub-confirm-phrase');if(phrase)phrase.value='';
+   }
  }
 }
 
