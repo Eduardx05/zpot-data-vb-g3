@@ -124,6 +124,83 @@ function pubIsConfirmedDevTarget(base){
 }
 
 function pubEndpoint(base,table,id){const t=String(table);if(!/^[A-Za-z][A-Za-z0-9_]*$/.test(t))throw Error('Nombre de objeto no válido: '+t);return base+'/'+encodeURIComponent(t)+(id===undefined?'':'/'+encodeURIComponent(String(id)));}
+// Column names and unique constraints are taken from the supplied BNCR entity.json.
+// A match must be exact; do not reconcile by fuzzy names or partial values.
+const PUB_UNIQUE_FIELDS={
+ AbsenceLapseCatalogue:[{name:'lapseType',type:'string'}],
+ AbsenceTypeCatalogue:[{name:'absenceName',type:'string'}],
+ CaseStageComplex:[{name:'stageRelatedId',type:'number'}],
+ CaseStageStatus:[{name:'statusCode',type:'string'}],
+ ExclusionCatalogue:[{name:'exclusionName',type:'string'}],
+ InvestmenPlan:[{name:'cases',type:'number'}],
+ RejectionHistory:[{name:'cases',type:'number'}],
+ SarasLevelCatalogue:[{name:'levelName',type:'string'}],
+ SarasLimitCatalogue:[{name:'keyCatalog',type:'string'}],
+ SarasProcess:[{name:'cases',type:'number'}],
+ Users:[{name:'cases',type:'number'}],
+ Zones:[{name:'cases',type:'number'}]
+};
+async function pubFindUnique(table,payload,base){
+ const fields=PUB_UNIQUE_FIELDS[table]||[];
+ if(!fields.length)return null;
+ let agreed=null;
+ for(const field of fields){
+  const value=payload[field.name];
+  if(value===undefined||value===null||String(value).trim()==='')continue;
+  const same=item=>{
+   if(!item||typeof item!=='object')return false;
+   const other=item[field.name];
+   if(other===null||other===undefined)return false;
+   if(field.type==='number')return String(other).trim()!==''&&Number.isFinite(Number(other))&&Number(other)===Number(value);
+   return String(other)===String(value);
+  };
+  const matches=new Set();
+  const consume=items=>{
+   if(!Array.isArray(items))throw Error('Oracle no devolvió una colección items para '+table+'.');
+   for(const item of items)if(same(item)){
+    const id=String(item.id??'').trim();
+    if(!/^[A-Za-z0-9._~-]+$/.test(id))throw Error('Coincidencia de '+field.name+' sin ID válido.');
+    matches.add(id);
+   }
+   if(matches.size>1)throw Error('Hay varias coincidencias para la clave única '+table+'.'+field.name+'. No se hará PATCH automático.');
+  };
+  const literal=field.type==='number'?
+   (Number.isFinite(Number(value))?String(Number(value)):null):
+   "'"+String(value).replace(/'/g,"''")+"'";
+  const q=literal===null?'':field.name+' = '+literal;
+  let complete=false;
+  if(q&&q.length<=512){
+   try{
+    const result=(await pubFetch(pubEndpoint(base,table)+'?limit=200&q='+encodeURIComponent(q))).json;
+    consume(result?.items);
+    // q may be ignored by some Oracle endpoints; validate the returned rows.
+    if(result.hasMore===false&&result.items.every(same))complete=true;
+   }catch(error){
+    // Some BO runtimes do not support q; use read-only pagination instead.
+    if(error.status!==400&&error.status!==422)throw error;
+   }
+  }
+  if(!complete){
+   matches.clear();
+   let offset=0;
+   while(offset<10000){
+    const page=(await pubFetch(pubEndpoint(base,table)+'?limit=200&offset='+offset)).json;
+    consume(page?.items);
+    const count=page.items.length;
+    if(page.hasMore===false||(page.hasMore===undefined&&count<200)){complete=true;break;}
+    if(count===0)throw Error('Oracle indica más registros pero devolvió una página vacía en '+table+'.');
+    offset+=count;
+   }
+   if(!complete)throw Error('No se pudo revisar completamente '+table+' (límite 10000). No se crearán duplicados.');
+  }
+  if(matches.size){
+   const id=[...matches][0];
+   if(agreed&&agreed.id!==id)throw Error('Las claves únicas de '+table+' apuntan a distintos IDs en Oracle.');
+   agreed={id,field:field.name};
+  }
+ }
+ return agreed;
+}
 function pubSelectedTables(){return [...PUB.tableSet].filter(x=>consolidation.size&&[...consolidation].some(i=>D[i].tables?.[x])).sort((a,b)=>a.localeCompare(b,'es'));}
 function pubAvailable(){return [...new Set([...consolidation].flatMap(i=>Object.keys(D[i].tables||{})))].filter(allowTable).sort((a,b)=>a.localeCompare(b,'es'));}
 function pubSetStatus(message,kind=''){let e=$('pub-status');if(e){e.textContent=message;e.className='notice'+(kind==='danger'?' danger':kind==='ok'?' success':'');}}
@@ -296,7 +373,7 @@ async function pubFetch(url,options={}){
  const ct=res.headers.get('content-type')||'',body=await res.text();
  if(/<html|<!doctype/i.test(body.slice(0,400)) && !ct.includes('json'))throw Error('El proxy devolvió HTML en lugar de JSON.');
  let parsed=null;try{parsed=JSON.parse(body)}catch{}
- if(!res.ok){const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;throw err;}
+ if(!res.ok){const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;err.oracleType=String(parsed?.type||'');throw err;}
  return {json:parsed,status:res.status,headers:res.headers};
 }
 async function pubTest(){pubFromInputs();let btn=$('pub-test'),out=$('pub-test-result');try{
@@ -447,12 +524,27 @@ async function pubSend(){
            const patchBody=JSON.stringify(patchPayload);
            let targetId=sourceId;
            if(PUB.mode==='sync'){
+             let matchedUnique=null;
+             const uniqueFields=PUB_UNIQUE_FIELDS[t]||[];
+             const findUnique=uniqueFields.length?async()=>{
+               const matched=await pubFindUnique(t,payload,base);
+               if(matched){
+                 const previousOwner=session.idMap.ownerOf(t,matched.id);
+                 if(previousOwner&&previousOwner!==sourceId)
+                   throw Error('La clave única '+t+'.'+matched.field+' apunta al ID Oracle '+matched.id+' que ya está asociado al origen '+previousOwner+'. Se requiere conciliación manual.');
+                 matchedUnique=matched;
+               }
+               return matched;
+             }:undefined;
              const sync=await window.ZPOTOracleRecordSync(sourceId,{
                read:key=>pubFetch(pubEndpoint(base,t,key),{headers:{Accept:'application/json'}}),
                create:()=>pubFetch(pubEndpoint(base,t),{method:'POST',headers,body:postBody}),
                update:key=>pubFetch(pubEndpoint(base,t,key),{method:'PATCH',headers,body:patchBody})
-             },{mappedTargetId:session.idMap.get(t,sourceId)});
+             },{mappedTargetId:session.idMap.get(t,sourceId),findUnique});
              result=sync.result;operation=sync.operation;targetId=sync.targetId;
+             if(matchedUnique&&matchedUnique.id===String(targetId)){
+               pubLog('↳ '+t+' origen '+sourceId+' asociado por '+matchedUnique.field+' a Oracle ID '+targetId+' (PATCH).');
+             }
            }else{
              targetId=PUB.mode==='update'?(session.idMap.get(t,sourceId)||sourceId):sourceId;
              const route=PUB.mode==='update'?pubEndpoint(base,t,targetId):pubEndpoint(base,t);
