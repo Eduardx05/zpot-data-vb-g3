@@ -62,6 +62,47 @@ Para usar Bearer, cambia `ORACLE_AUTH_MODE=bearer` y configura `ORACLE_BEARER_TO
 - JSON para nombres personalizados, fecha de pase, ambiente declarado, prioridades y preferencias de fuentes.
 - Publicador API con GET de comprobación, vista previa, POST/PATCH/Upsert cuando sea admitido, detención y reporte de resultados.
 
+## Publicar Oracle con batch y paralelo (copia de V1)
+
+El menú **Administrar → Publicar Oracle con batch y paralelo** es una pantalla
+independiente de **Publicar en Oracle**. Reutiliza la interfaz y opciones V1:
+ZIP/fuentes y prioridades, consolidación y deduplicación, selección automática
+de padres, diagrama de los 104 BO, límites de filas, esquema, previsualización,
+modos de sincronización por ID y PATCH, campos vacíos, reconciliación de claves
+únicas, importación de mapeos y confirmación explícita. El motor de envío es
+diferente; el publicador secuencial V1 permanece disponible y sin cambios.
+
+- **Tamaño de lote**: 5, 10 o 25 registros por solicitud ADF batch;
+  **paralelismo**: 1, 2 o 3 solicitudes simultáneas (por defecto 10 × 2).
+- Las etapas de dependencias se procesan en orden padre→hijo; solo se envían
+  lotes independientes de una misma etapa en paralelo.
+- Modo recomendado: **GET por ID → PATCH si existe / POST si Oracle confirma
+  que no existe**. La búsqueda por clave única declarada puede resolver un
+  registro existente con ID distinto; el PATCH se dirige a ese ID Oracle, y
+  la auditoría registra el mapeo ID origen → ID Oracle. Se admite también
+  solo PATCH o POST explícito. Upsert-Mode **no está disponible** en batch.
+- Se verifican antes de publicar las colecciones, referencias y los IDs de
+  destino. Las referencias entre filas **nuevas** del mismo BO deben
+  publicarse con **V1 secuencial**, porque requieren orden dentro de la tabla.
+- Si un registro viola validaciones de Oracle, **puede fallar todo su lote**:
+  la opción V1 de omitir filas aplica a prevalidaciones seguras, no a
+  errores ocurridos durante un batch incierto. No hay reintentos automáticos,
+  transacción global ni rollback entre lotes.
+- **Detener** finaliza las solicitudes que ya estén en vuelo y no inicia
+  nuevas ondas. Descarga la auditoría JSON con confirmaciones y mapas de IDs.
+  Una auditoría pausada limpiamente puede importarse para continuar con los
+  mismos ZIP, parámetros y destino, después de verificar nuevamente GET y
+  autorizar. Ante timeout, fallo de red, error de lote o resultado incierto,
+  se requiere conciliación manual; el programa prohíbe su reanudación automática.
+- El servidor exige habilitación explícita de escritura únicamente en OIC
+  Desarrollo y la confirmación **CARGAR DESARROLLO**, idéntica a V1.
+  No publica datos DEMO.
+
+**Pruebas recomendadas:** selecciona primero un catálogo de cinco registros,
+elige batch 5 / paralelismo 1, verifica GET, confirma respaldo y ejecuta. Después
+prueba 10 / 2, un padre e hijo en etapas distintas, y un PATCH cuyo ID Oracle
+difiere del ID CSV. Verifica el reporte de auditoría e IDs remapeados.
+
 ## Seguridad
 
 - Node escucha solo `127.0.0.1`/`localhost`. No se habilita CORS abierto.

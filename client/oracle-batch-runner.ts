@@ -3,7 +3,7 @@
  * Processes dependency stages sequentially; sends independent same-stage
  * batches with bounded concurrency. Never retries an uncertain write.
  */
-type BatchChange={object:string;id:string;action:'create'|'update';changedFields:string[]};
+type BatchChange={object:string;id:string;targetId?:string;action:'create'|'update';changedFields:string[]};
 type BatchRecord=Record<string,string>;
 type BatchTable={columns:string[];rows:BatchRecord[]};
 type BatchRelation={field:string;target:string};
@@ -32,7 +32,7 @@ async function executeOracleBatches(options:BatchExecutorOptions){
  const group=new Map<string,BatchChange[]>();
  for(const change of changes){
   if(!set.has(change.object))throw Error('Un BO del diferencial no aparece en el plan: '+change.object);
-  if(!/^[A-Za-z][A-Za-z0-9_]*$/.test(change.object)||!/^[A-Za-z0-9._~-]+$/.test(change.id))
+  if(!/^[A-Za-z][A-Za-z0-9_]*$/.test(change.object)||!/^[A-Za-z0-9._~-]+$/.test(change.id)||change.targetId!==undefined&&!/^[A-Za-z0-9._~-]+$/.test(change.targetId))
    throw Error('BO o ID inválido en el diferencial.');
   const done=options.resume?.completed?.[change.object]||[];
   if(done.includes(change.id))continue;
@@ -88,7 +88,7 @@ async function executeOracleBatches(options:BatchExecutorOptions){
      }
      const payload=normalize(table,row,columns);
      if(op.action==='update')delete payload.id;
-     return {id:'p'+(index+1),path:'/'+table+(op.action==='update'?'/'+op.id:''),
+     return {id:'p'+(index+1),path:'/'+table+(op.action==='update'?'/'+(op.targetId||op.id):''),
       operation:op.action,payload};
     });
     const json=await send(parts);
@@ -102,7 +102,7 @@ async function executeOracleBatches(options:BatchExecutorOptions){
        typeof result.status==='number'&&(result.status<200||result.status>=300)||result.error)
       throw Error('Oracle no confirmó la operación batch '+table+'/'+source.id+
        '. Verifica el lote antes de reintentar.');
-     const oracleId=source.action==='update'?source.id:String(result.payload?.id??'').trim();
+     const oracleId=source.action==='update'?(source.targetId||source.id):String(result.payload?.id??'').trim();
      if(!/^[A-Za-z0-9._~-]+$/.test(oracleId))
       throw Error('El batch no devolvió ID Oracle para '+table+' origen '+source.id+'. Verifica el registro antes de reintentar.');
      confirmedOps.push({sourceId:source.id,oracleId,action:source.action});
