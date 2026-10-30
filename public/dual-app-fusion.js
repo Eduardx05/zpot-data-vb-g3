@@ -111,9 +111,9 @@
    const relationships=Object.fromEntries(Object.entries(window.ZPOTBOMasterModel?.objects||{}).map(([n,def])=>[n,def.outgoing||[]]));
    const keys=typeof PUB_UNIQUE_FIELDS==='object'?PUB_UNIQUE_FIELDS:{};
    const merged=window.ZPOTDualAppMerge.merge({oldTables:older,newTables:newer,relations:relationships,uniqueKeys:keys});
-   F.preview=merged;F.signature=sig;
+   F.preview=merged;F.signature=sig;F.busy=false;
    renderPage();
-  }catch(error){status('No se pudo analizar: '+error.message,true);setMsg('Error en fusión: '+error.message,'error');}
+  }catch(error){F.busy=false;status('No se pudo analizar: '+error.message,true);setMsg('Error en fusión: '+error.message,'error');}
   finally{F.busy=false;const b=document.getElementById('fusion-analyze');if(b)b.disabled=false;}
  }
  function audit(){
@@ -142,8 +142,9 @@
   });
  }
  function fileName(){
-  const date=new Date().toISOString().slice(0,10);
-  return (F.preview?.totals.blocking?'BNCR_FUSION_REVISAR_NO_PUBLICAR_':'BNCR_FUSION_CONSOLIDADA_')+date+'.zip';
+  const date=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
+  const oldSha=String(D[F.oldIndex]?.sha||'').slice(0,6),newSha=String(D[F.newIndex]?.sha||'').slice(0,6);
+  return (F.preview?.totals.blocking?'BNCR_FUSION_REVISAR_NO_PUBLICAR_':'BNCR_FUSION_CONSOLIDADA_')+date+'_'+oldSha+'_'+newSha+'.zip';
  }
  async function exportZip(){
   if(F.busy||!F.preview)return;
