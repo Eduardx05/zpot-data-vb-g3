@@ -125,3 +125,18 @@ Por preferencia funcional, se carga `AbsenceTypeCatalogue` antes de `AbsenceLaps
 
 El mismo mapa maestro se aplica a la selección automática de padres, el orden por etapas, la validación de referencias por ID y el remapeo de llaves foráneas. Si un objeto futuro no está en ese modelo, se usa su definición declarada en el ZIP; solo cuando tampoco exista, se intenta inferir por coincidencia exacta de columna y se marca la relación como inferida para revisión.
 
+
+### Importar con PATCH y mantener los IDs de los Business Objects
+
+En **Publicar en Oracle → Modo de escritura** están disponibles:
+- **Por ID: PATCH existente / POST nuevo (solo 404)** (predeterminado): consulta el ID en Oracle; si existe, envía PATCH a ese ID. Si Oracle confirma que no existe (HTTP 404), crea mediante POST. Cualquier error 401/403/5xx o de red cancela sin crear otro registro.
+- **Solo PATCH · actualizar IDs existentes, sin crear:** no realiza POST; si el ID no existe, detiene la etapa.
+- Los métodos POST y Upsert heredados siguen disponibles para pruebas específicas y requieren revisar duplicados por separado.
+
+El cuerpo PATCH **excluye el campo `id`** para no intentar cambiar la clave primaria. El cuerpo POST puede incluir el ID original cuando `Intentar conservar id original` está habilitado, pero Oracle puede asignar un nuevo ID igualmente.
+
+Cuando Oracle crea un registro y devuelve otro ID, ZPOT guarda la equivalencia `ID origen → ID Oracle`; las FK de los hijos se remapean en esa sesión. El reporte JSON contiene `idMappings`. Antes de **repetir una importación**, utiliza el botón **Importar equivalencias de IDs (auditoría JSON)** para cargar un reporte del **mismo endpoint**, de modo que los registros creados anteriormente se actualicen mediante PATCH al ID real de Oracle. El archivo no se guarda en Git ni en `localStorage`. Guarda una copia privada de la auditoría.
+
+**PATCH no inserta filas inexistentes.** Si Oracle no devuelve el ID del registro creado ni en la respuesta ni en la cabecera Location, ZPOT intenta comprobar el ID original mediante GET y, si no puede identificar el registro, detiene la carga para evitar relaciones incorrectas. No reintentes a ciegas una creación que devolvió una respuesta ambigua.
+
+En el ambiente controlado de OIC Desarrollo se permite migrar también `Configuration`, pero sus parámetros de URL/seguridad se señalan como advertencia en el reporte y se incluyen sin modificarlos.
