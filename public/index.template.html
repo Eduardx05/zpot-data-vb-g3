@@ -434,7 +434,7 @@ async function pubRecoverSkippedParent(session,parent,sourceId,base){
  });
  pubLog('↳ Referencia recuperada de Oracle: '+parent+' origen '+sourceId+' → Oracle '+found.id+' mediante '+field+
   ' (solo lectura; no se hizo POST ni PATCH al padre).');
- pubRefreshCheckpoint(session);
+ // The caller writes its checkpoint after processing the child or on pause.
  return true;
 }
 // Verify each row just before writing, rather than blocking an entire stage.
