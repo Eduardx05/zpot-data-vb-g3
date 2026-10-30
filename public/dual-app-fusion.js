@@ -2,7 +2,7 @@
    Runs locally against ZIPs already loaded by the explorer. */
 (function(){
  'use strict';
- const F={oldIndex:-1,newIndex:-1,preview:null,delta:null,inputs:null,decisions:{},signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false,detailTable:'',baselineConfirmed:false,issueSearch:'',issueSeverity:'all',issuePage:0,issueShowResolved:true,bulkTable:''};
+ const F={oldIndex:-1,newIndex:-1,preview:null,delta:null,inputs:null,decisions:{},signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false,detailTable:'',baselineConfirmed:false,issueSearch:'',issueSeverity:'all',issuePage:0,issueShowResolved:true,bulkTable:'',batchSize:10,batchConcurrency:2,batchChecked:false,batchBusy:false,batchStop:false,batchReport:null};
  const safe=(value)=>esc(String(value??''));
  const name=(index)=>D[index]?nominal(D[index]):'No seleccionado';
  const choices=(current,exclude)=>'<option value="-1">Selecciona un ZIP…</option>'+
@@ -82,6 +82,25 @@
       ${F.destination==='oracle'?'<button class="btn btn-primary" id="fusion-publish" '+(m.blocking||F.busy||!F.baselineConfirmed||!F.delta?.totals.totalWrites?'disabled':'')+'>Preparar solo cambios en Oracle</button>':''}
      </div>
      <p class="footnote">La publicación es una operación separada. El ZIP generado no borra datos y no implica que los conflictos de unicidad del destino estén resueltos; el publicador debe validarlos contra Oracle.</p>`);
+    ${F.destination==='oracle'?block('5 · Enviar por Oracle API Batch (solo diferencias)',`
+      <div class="notice"><strong>API batch oficial:</strong> agrupa 10 registros por solicitud (configurable) y permite hasta 3 solicitudes simultáneas. Se respetan las etapas padre-hijo; Oracle confirma o revierte cada lote completo.</div>
+      <div class="settings-grid">
+       <label>Registros por lote<select id="fusion-batch-size"><option value="5" ${F.batchSize===5?'selected':''}>5</option><option value="10" ${F.batchSize===10?'selected':''}>10 (recomendado)</option><option value="25" ${F.batchSize===25?'selected':''}>25</option></select></label>
+       <label>Solicitudes simultáneas<select id="fusion-batch-concurrency"><option value="1" ${F.batchConcurrency===1?'selected':''}>1 · conservador</option><option value="2" ${F.batchConcurrency===2?'selected':''}>2 · recomendado</option><option value="3" ${F.batchConcurrency===3?'selected':''}>3 · máximo</option></select></label>
+      </div>
+      <div class="actions"><button class="btn" id="fusion-batch-verify" ${F.batchBusy?'disabled':''}>Verificar lectura GET de los BO del diferencial</button></div>
+      <div class="notice">${F.batchChecked?'✓ GET verificados en esta sesión.':'Pendiente de verificar los endpoints del destino con GET.'} Solo OIC Desarrollo.</div>
+      <label class="block-label">Para autorizar, escribe <code>CARGAR DESARROLLO</code>
+       <input id="fusion-batch-phrase" autocomplete="off" placeholder="CARGAR DESARROLLO" value=""/>
+      </label>
+      <div class="actions">
+       <button class="btn btn-primary" id="fusion-batch-start" ${!F.baselineConfirmed||m.blocking||!F.batchChecked||!F.delta?.totals.totalWrites||F.batchBusy||F.batchReport?.status==='completed'?'disabled':''}>Enviar ${fmt(d.totalWrites)} cambios mediante API batch</button>
+       <button class="btn" id="fusion-batch-stop" ${!F.batchBusy?'disabled':''}>Detener después de los lotes en curso</button>
+       <button class="btn" id="fusion-batch-report" ${!F.batchReport?'disabled':''}>Descargar JSON de lotes y equivalencias</button>
+      </div>
+      <div id="fusion-batch-progress" class="notice">${F.batchReport?'Confirmados: '+fmt(F.batchReport.confirmed)+' / '+fmt(d.totalWrites)+'. Estado: '+safe(F.batchReport.status):'No hay lotes enviados todavía.'}</div>
+      <p class="footnote">Si Oracle devuelve timeout, HTTP 5xx o una respuesta batch incompleta, se detendrá sin reintentar automáticamente. Conserva el JSON para verificar los IDs confirmados.</p>
+     `):''}
   }
   return html;
  }
