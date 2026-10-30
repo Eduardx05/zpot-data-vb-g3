@@ -57,7 +57,7 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
  const mappings:FusionResult['mappings']={old:{},new:{}};
  const result:Record<string,FusionTable>={},reports:FusionTableReport[]=[];
  const allNames=[...new Set([...Object.keys(oldTables),...Object.keys(newTables)])].sort();
- type Item={row:FusionRow;origin:'old'|'new';fieldOrigins:Record<string,'old'|'new'>};
+ type Item={row:FusionRow;origin:'old'|'new';sourceId:string;fieldOrigins:Record<string,'old'|'new'>;fieldSourceIds:Record<string,string>};
  const itemsByTable=new Map<string,Item[]>();
  const clean=(v:unknown)=>String(v??'').trim();
  const normalize=(v:unknown)=>clean(v).normalize('NFC').toLocaleLowerCase('es').replace(/\s+/g,' ');
@@ -115,7 +115,7 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
   };
   const put=(row:FusionRow,origin:'old'|'new',oldId:string,newId:string):Item=>{
    const copy={...row,id:newId};
-   const item:Item={row:copy,origin,fieldOrigins:Object.fromEntries(columns.map(c=>[c,origin]))};
+   const item:Item={row:copy,origin,sourceId:oldId,fieldOrigins:Object.fromEntries(columns.map(c=>[c,origin])),fieldSourceIds:Object.fromEntries(columns.map(c=>[c,oldId]))};
    items.push(item);byId.set(newId,item);used.add(newId);remember(origin,oldId,newId);
    registerBusiness(item);
    return item;
@@ -176,7 +176,7 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
      else if(isCatalog)update=was==='';
      else if(isConfig)update=was===''||(newIsNewer&&was!==value);
      else update=was===''||(!isConfig&&!isCatalog&&newIsNewer&&was!==value);
-     if(update&&was!==value){match.row[c]=value;match.fieldOrigins[c]='new';changes++;}
+     if(update&&was!==value){match.row[c]=value;match.fieldOrigins[c]='new';match.fieldSourceIds[c]=sourceId;changes++;}
      else if(was!==value&&!update&&isConfig&&!newIsNewer)
       issue('warning',table,'new',sourceId,'Configuración '+c+' diferente, sin fecha nueva verificable: se conserva el valor anterior.');
     }
@@ -220,25 +220,26 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
    if(!validId(original)){issue('warning',table,item.origin,clean(item.row.id),
      'Referencia de texto '+rel.field+' sin resolución automática.');continue;}
    const origin=item.fieldOrigins[rel.field]||item.origin;
-   const refRule=rule('reference',table,origin,clean(item.row.id),rel.field);
+   const originalChildId=item.fieldSourceIds[rel.field]||item.sourceId;
+   const refRule=rule('reference',table,origin,originalChildId,rel.field);
    if(refRule?.action==='link-parent'){
     const target=clean(refRule.targetId);
     if(result[rel.target]?.rows.some(row=>clean(row.id)===target)){
-     item.row[rel.field]=target;recordDecision('reference',table,origin,clean(item.row.id),refRule,rel.field);
+     item.row[rel.field]=target;recordDecision('reference',table,origin,originalChildId,refRule,rel.field);
      continue;
     }
     missing++;
-    issue('blocking',table,origin,clean(item.row.id),
+    issue('blocking',table,origin,originalChildId,
      'El ID '+target+' seleccionado no existe en el BO padre '+rel.target+'.',
-     {kind:'reference',key:fusionDecisionKey('reference',table,origin,clean(item.row.id),rel.field),
+     {kind:'reference',key:fusionDecisionKey('reference',table,origin,originalChildId,rel.field),
       field:rel.field,targetTable:rel.target,referenceId:original});continue;
    }
    const preferred=mappings[origin][rel.target]?.[original];
    const other=mappings[origin==='old'?'new':'old'][rel.target]?.[original];
    const mapped=preferred||(preferred===undefined?other:undefined);
-   if(!mapped){missing++;issue('blocking',table,origin,clean(item.row.id),
+   if(!mapped){missing++;issue('blocking',table,origin,originalChildId,
       'Referencia no resuelta: '+table+'.'+rel.field+'='+original+' → '+rel.target,
-      {kind:'reference',key:fusionDecisionKey('reference',table,origin,clean(item.row.id),rel.field),
+      {kind:'reference',key:fusionDecisionKey('reference',table,origin,originalChildId,rel.field),
        field:rel.field,targetTable:rel.target,referenceId:original});continue;}
    // When origin data references a parent that exists in both sources with
    // different new IDs, mapping through the other source needs review.
