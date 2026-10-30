@@ -123,13 +123,34 @@
   const sig=signature();
   try{
    const [older,newer]=await Promise.all([readTables(D[F.oldIndex]),readTables(D[F.newIndex])]);
+   F.decisions={};F.issuePage=0;F.baselineConfirmed=false;
    const relationships=Object.fromEntries(Object.entries(window.ZPOTBOMasterModel?.objects||{}).map(([n,def])=>[n,def.outgoing||[]]));
    const keys=typeof PUB_UNIQUE_FIELDS==='object'?PUB_UNIQUE_FIELDS:{};
-   const merged=window.ZPOTDualAppMerge.merge({oldTables:older,newTables:newer,relations:relationships,uniqueKeys:keys});
-   F.preview=merged;F.signature=sig;F.busy=false;
+   F.inputs={oldTables:older,newTables:newer,relations:relationships,uniqueKeys:keys};
+   recalculate();
+   F.signature=sig;F.busy=false;
    renderPage();
   }catch(error){F.busy=false;status('No se pudo analizar: '+error.message,true);setMsg('Error en fusión: '+error.message,'error');}
   finally{F.busy=false;const b=document.getElementById('fusion-analyze');if(b)b.disabled=false;}
+ }
+ function recalculate(){
+  if(!F.inputs||!window.ZPOTDualAppMerge||!window.ZPOTOracleMergeDelta)
+   throw Error('No se ha cargado el motor de fusión/diferencias. Ejecuta npm run build.');
+  const merged=window.ZPOTDualAppMerge.merge({...F.inputs,decisions:F.decisions});
+  const delta=window.ZPOTOracleMergeDelta.build({baseline:F.inputs.oldTables,merged:merged.tables});
+  F.preview=merged;F.delta=delta;
+ }
+ function applyDecision(key,action,targetId=''){
+  if(!F.inputs)throw Error('Primero analiza ambos ZIP.');
+  const previous=F.decisions[key],oldPreview=F.preview,oldDelta=F.delta;
+  if(action==='default')delete F.decisions[key];
+  else F.decisions[key]={action,...(targetId?{targetId}:{})};
+  try{recalculate();}
+  catch(error){
+   if(previous)F.decisions[key]=previous;else delete F.decisions[key];
+   F.preview=oldPreview;F.delta=oldDelta;throw error;
+  }
+  F.issuePage=0;renderPage();
  }
  function audit(){
   if(!F.preview||F.signature!==signature())throw Error('La vista previa cambió. Repite el análisis.');
@@ -139,8 +160,10 @@
    destination:F.destination==='oracle'?PUB_DEV_URL:'local/DataManager',
    policy:{catalogs:'older-first',cases:'opportunityNumber identity + newer verified modifications',configuration:'keyCatalog + newer timestamp',historical:'preserve both namespaces',idConflicts:'allocate new IDs and rewrite foreign keys'},
    totals:F.preview.totals,tables:F.preview.reports,issues:F.preview.issues,
-   idMappings:F.preview.mappings,
-   publishAllowed:F.preview.totals.blocking===0
+   idMappings:F.preview.mappings,resolutions:F.preview.resolutions,decisions:F.decisions,
+   baseline:{filename:D[F.oldIndex].filename,sha:D[F.oldIndex].sha,operatorConfirmed:F.baselineConfirmed},
+   differential:{totals:F.delta?.totals,tables:F.delta?.report,operations:F.delta?.operations},
+   publishAllowed:F.preview.totals.blocking===0&&F.baselineConfirmed
   };
  }
  function renderPage(){if(section==='fusionar')render();}
@@ -193,7 +216,7 @@
  document.addEventListener('change',e=>{
   const x=e.target;if(!x.closest('#main')||section!=='fusionar')return;
   if(x.id==='fusion-old'||x.id==='fusion-new'){
-   F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);F.preview=null;renderPage();
+   F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);F.preview=null;F.delta=null;F.inputs=null;F.decisions={};F.baselineConfirmed=false;renderPage();
   }
   if(x.id==='fusion-destination'){F.destination=x.value;renderPage();}
   if(x.id==='fusion-detail-object'&&F.preview){F.detailTable=x.value;document.getElementById('fusion-detail-result').innerHTML=detailHtml(F.preview);}
