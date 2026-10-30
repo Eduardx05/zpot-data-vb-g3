@@ -401,6 +401,40 @@ function pubSkipError(message,metadata={}){
  Object.assign(error,metadata);
  return error;
 }
+// A parent skipped because Oracle already has its unique value can still be
+// mapped safely for children, without creating or modifying the parent.
+async function pubRecoverSkippedParent(session,parent,sourceId,base){
+ const key=parent+'/'+sourceId;
+ if(!session.unresolvedSkippedParents)session.unresolvedSkippedParents=new Set();
+ if(session.unresolvedSkippedParents.has(key))return false;
+ const issue=session.report?.skippedRecords?.find(x=>
+  x.object===parent&&String(x.id)===sourceId&&/uniquenessViolation/i.test(String(x.oracleType||'')));
+ const field=issue?.field;
+ if(!field||(PUB_UNIQUE_FIELDS[parent]||[]).every(def=>def.name!==field))return false;
+ const pack=session.packs.get(parent);
+ const row=pack?.rows.find(x=>String(x.id??'').trim()===sourceId);
+ if(!row)return false;
+ const payload=pubPayload(parent,row,pack.cols);
+ const found=await pubFindUnique(parent,payload,base,'normalized',field);
+ if(!found){session.unresolvedSkippedParents.add(key);return false;}
+ if(found.field!==field)throw pubSkipError('Oracle devolvió una clave única distinta para '+parent+' ID '+sourceId);
+ const owner=session.idMap.ownerOf(parent,found.id);
+ if(owner&&owner!==sourceId)throw pubSkipError('El ID Oracle '+found.id+' de '+parent+' ya pertenece al origen '+owner+'. Se mantiene el hijo omitido.');
+ const response=await pubFetch(pubEndpoint(base,parent,found.id),{headers:{Accept:'application/json'}});
+ if(response.json?.id!==undefined&&String(response.json.id)!==String(found.id))
+  throw pubSkipError('La respuesta Oracle no corresponde al ID identificado para '+parent+'.');
+ session.idMap.put(parent,sourceId,found.id);
+ if(!session.successfulIds.has(parent))session.successfulIds.set(parent,new Set());
+ session.successfulIds.get(parent).add(sourceId);
+ session.skippedIds.get(parent)?.delete(sourceId);
+ (session.report.referenceResolutions??=[]).push({
+  object:parent,originalId:sourceId,oracleId:String(found.id),matchedByUnique:field,operation:'reference-only',stage:session.nextStage+1
+ });
+ pubLog('↳ Referencia recuperada de Oracle: '+parent+' origen '+sourceId+' → Oracle '+found.id+' mediante '+field+
+  ' (solo lectura; no se hizo POST ni PATCH al padre).');
+ pubRefreshCheckpoint(session);
+ return true;
+}
 // Verify each row just before writing, rather than blocking an entire stage.
 // A skipped parent can NEVER silently resolve to an unrelated Oracle ID.
 async function pubCheckRowReferences(pack,row,session,base){
@@ -414,8 +448,11 @@ async function pubCheckRowReferences(pack,row,session,base){
   const id=String(row[rel.field]??'').trim();
   if(!id||id==='0'||id.toLowerCase()==='null')continue;
   const parent=rel.target,sourceKey=parent+'/'+id;
-  if(omitted.get(parent)?.has(id))
-   throw pubSkipError('Padre omitido: '+parent+' ID origen '+id+' ('+pack.table+'.'+rel.field+'). Se omite el hijo para evitar referencias erróneas.',{parent,field:rel.field,parentId:id});
+  if(omitted.get(parent)?.has(id)){
+   const resolved=await pubRecoverSkippedParent(session,parent,id,base);
+   if(!resolved)
+    throw pubSkipError('Padre omitido: '+parent+' ID origen '+id+' ('+pack.table+'.'+rel.field+'). No se halló un único ID Oracle seguro. Se omite el hijo para evitar referencias erróneas.',{parent,field:rel.field,parentId:id});
+  }
   if(done.get(parent)?.has(id))continue;
   const planned=session.packs.get(parent);
   if(planned?.rows.some(x=>String(x.id??'').trim()===id))
