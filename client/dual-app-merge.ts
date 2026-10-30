@@ -122,7 +122,8 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
   };
   for(const row of older.rows){
    const id=clean(row.id);
-   if(validId(id)&&skipRow(table,'old',id)){stat.skipped++;continue;}
+   // Rows declared already present in Oracle cannot be deleted by a merge decision.
+   // The baseline must remain intact.
    if(!validId(id)){issue('blocking',table,'old',id,'Fila antigua sin ID válido; no se puede preservar.');continue;}
    if(byId.has(id)){issue('blocking',table,'old',id,'ID duplicado dentro del ZIP antiguo.');continue;}
    put(row,'old',id,id);
@@ -147,7 +148,7 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
    if(!match&&bySameId&&collisionRule&&['keep-old','replace-old'].includes(collisionRule.action)){
     const fk=input.relations?.[table]||[];
     const a=businessKey(row),b=businessKey(bySameId.row);
-    if(fk.length||(table==='Cases'&&(!a||!b||a!==b))||(a&&b&&a!==b)){
+    if(fk.length||!a||!b||a!==b){
       issue('blocking',table,'new',sourceId,'No se pueden unificar IDs: claves de negocio o referencias incompatibles.',
        {kind:'collision',key:fusionDecisionKey('collision',table,'new',sourceId)});
     }else{
@@ -236,15 +237,17 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
    }
    const preferred=mappings[origin][rel.target]?.[original];
    const other=mappings[origin==='old'?'new':'old'][rel.target]?.[original];
-   const mapped=preferred||(preferred===undefined?other:undefined);
+   // Never use a similarly numbered record from the OTHER application as
+   // an automatic FK substitute. An explicit user-selected parent ID is required.
+   const mapped=preferred;
    if(!mapped){missing++;issue('blocking',table,origin,originalChildId,
       'Referencia no resuelta: '+table+'.'+rel.field+'='+original+' → '+rel.target,
       {kind:'reference',key:fusionDecisionKey('reference',table,origin,originalChildId,rel.field),
        field:rel.field,targetTable:rel.target,referenceId:original});continue;}
    // When origin data references a parent that exists in both sources with
    // different new IDs, mapping through the other source needs review.
-   if(!preferred&&other)issue('warning',table,origin,clean(item.row.id),
-    'Referencia '+rel.field+' resuelta desde el otro ZIP; verificar que comparten identidad de negocio.');
+   if(!preferred&&other)issue('warning',table,origin,originalChildId,
+    'Existe un ID parecido en el otro ZIP, pero no se usó por seguridad. Selecciona el padre real.');
    item.row[rel.field]=mapped;
   }
  }
