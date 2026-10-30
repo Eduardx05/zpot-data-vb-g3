@@ -278,27 +278,94 @@
     ' actualizaciones; los datos sin cambios de ZIP A no se enviarán. Comprueba GET y autoriza cuando corresponda.','warn');
   }catch(e){status('No se pudo preparar la publicación: '+e.message,true);F.busy=false;}
  }
+ function filteredIssues(){
+  return (F.preview?.issues||[]).filter(i=>(F.issueShowResolved||!i.resolved)&&
+   (F.issueSeverity==='all'||i.severity===F.issueSeverity)&&
+   (!F.issueSearch||[i.table,i.id,i.message,i.source].some(v=>String(v).toLowerCase().includes(F.issueSearch.toLowerCase()))));
+ }
+ function updateIssuesHtml(){
+  const node=document.getElementById('fusion-issues');
+  if(node&&F.preview)node.innerHTML=issuesHtml(F.preview);
+ }
  document.addEventListener('change',e=>{
   const x=e.target;if(!x.closest('#main')||section!=='fusionar')return;
   if(x.id==='fusion-old'||x.id==='fusion-new'){
-   F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);F.preview=null;F.delta=null;F.inputs=null;F.decisions={};F.baselineConfirmed=false;renderPage();
+   F[x.id==='fusion-old'?'oldIndex':'newIndex']=Number(x.value);
+   F.preview=null;F.delta=null;F.inputs=null;F.decisions={};
+   F.baselineConfirmed=false;renderPage();return;
   }
-  if(x.id==='fusion-destination'){F.destination=x.value;renderPage();}
-  if(x.id==='fusion-detail-object'&&F.preview){F.detailTable=x.value;document.getElementById('fusion-detail-result').innerHTML=detailHtml(F.preview);}
-  if(x.id==='fusion-only-issues'){F.issuesOnly=x.checked;document.getElementById('fusion-tables').innerHTML=tablesHtml(F.preview);}
+  if(x.id==='fusion-baseline-confirm'){F.baselineConfirmed=x.checked;renderPage();return;}
+  if(x.id==='fusion-destination'){F.destination=x.value;renderPage();return;}
+  if(x.id==='fusion-detail-object'&&F.preview){
+   F.detailTable=x.value;document.getElementById('fusion-detail-result').innerHTML=detailHtml(F.preview);return;
+  }
+  if(x.id==='fusion-only-issues'){
+   F.issuesOnly=x.checked;document.getElementById('fusion-tables').innerHTML=tablesHtml(F.preview);return;
+  }
+  if(x.id==='fusion-issue-severity'){
+   F.issueSeverity=x.value;F.issuePage=0;updateIssuesHtml();return;
+  }
+  if(x.id==='fusion-issue-resolved'){
+   F.issueShowResolved=x.checked;F.issuePage=0;updateIssuesHtml();return;
+  }
+  if(x.id==='fusion-bulk-table'){
+   F.bulkTable=x.value;updateIssuesHtml();return;
+  }
  });
  document.addEventListener('input',e=>{
-  const x=e.target;if(x.id==='fusion-filter'&&F.preview&&section==='fusionar'){
-   F.filter=x.value;const target=document.getElementById('fusion-tables');if(target)target.innerHTML=tablesHtml(F.preview);
+  const x=e.target;if(section!=='fusionar')return;
+  if(x.id==='fusion-issue-search'&&F.preview){
+   F.issueSearch=x.value;F.issuePage=0;updateIssuesHtml();return;
+  }
+  if(x.id==='fusion-filter'&&F.preview){
+   F.filter=x.value;const target=document.getElementById('fusion-tables');
+   if(target)target.innerHTML=tablesHtml(F.preview);
   }
  });
  document.addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b||section!=='fusionar')return;
   if(b.id==='fusion-add')document.getElementById('zip-uploader')?.click();
   if(b.id==='fusion-analyze')analyze();
-  if(b.id==='fusion-download')exportZip();
-  if(b.id==='fusion-json'){try{downloadJSON('BNCR_FUSION_AUDITORIA_'+new Date().toISOString().slice(0,10)+'.json',audit());}catch(err){status(err.message,true);}}
+  if(b.id==='fusion-download')exportZip('full');
+  if(b.id==='fusion-download-delta')exportZip('delta');
+  if(b.id==='fusion-json'){
+   try{downloadJSON('BNCR_FUSION_AUDITORIA_'+new Date().toISOString().slice(0,10)+'.json',audit());}
+   catch(err){status(err.message,true);}
+  }
   if(b.id==='fusion-publish')preparePublication();
+  if(b.id==='fusion-issue-prev'||b.id==='fusion-issue-next'){
+   F.issuePage+=b.id==='fusion-issue-next'?1:-1;
+   updateIssuesHtml();return;
+  }
+  if(b.dataset.fusionApply!==undefined){
+   try{
+    const issue=filteredIssues()[Number(b.dataset.fusionApply)];
+    if(!issue)throw Error('La incidencia cambió. Vuelve a seleccionarla.');
+    const tr=b.closest('tr'),key=issue.key||window.ZPOTDualAppMerge.key('row',issue.table,issue.source,issue.id);
+    const action=tr.querySelector('.fusion-choice')?.value||'default';
+    const parentId=tr.querySelector('.fusion-parent-id')?.value?.trim()||'';
+    if(action==='link-parent'&&!parentId)throw Error('Introduce un ID válido del BO padre.');
+    applyDecision(key,action,parentId);
+   }catch(error){status('No se pudo aplicar la decisión: '+error.message,true);}
+   return;
+  }
+  if(b.id==='fusion-bulk-both'||b.id==='fusion-bulk-skip'){
+   try{
+    if(!F.bulkTable)throw Error('Selecciona un BO.');
+    const issues=F.preview.issues.filter(i=>i.table===F.bulkTable&&i.kind==='collision'&&i.source==='new');
+    const action=b.id==='fusion-bulk-both'?'keep-both':'skip-new';
+    if(!window.confirm('Aplicar '+action+' a '+issues.length+' colisiones de '+F.bulkTable+'? Los IDs del ZIP A no se modificarán.'))return;
+    const previous={...F.decisions};
+    try{
+     for(const issue of issues){
+      const key=issue.key||window.ZPOTDualAppMerge.key('collision',issue.table,issue.source,issue.id);
+      F.decisions[key]={action};
+     }
+     recalculate();F.issuePage=0;renderPage();
+    }catch(error){F.decisions=previous;recalculate();throw error;}
+   }catch(error){status('No se pudo resolver en lote: '+error.message,true);}
+   return;
+  }
  });
  window.ZPOTDualFusionUI={render:renderFusion,analyze,exportZip};
 })();
