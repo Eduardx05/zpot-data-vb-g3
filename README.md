@@ -102,3 +102,26 @@ Los vínculos se basan exclusivamente en **IDs de relaciones declaradas en Visua
 **Limitación de reintentos:** el mapa de IDs generados se mantiene en memoria durante la sesión. Guarda la auditoría y verifica los registros antes de reiniciar o repetir la carga; si Oracle generó nuevos IDs, un reintento posterior basado solo en el ID original podría crear duplicados. No se realiza un rollback automático.
 
 **Importante:** para realizar cambios, el usuario técnico necesita permisos Oracle de POST/PATCH. El proxy puede rechazar escritura si `ENABLE_ORACLE_WRITES=false`, pero habilitarlo no resuelve permisos Oracle 403.
+
+## Modelo maestro de relaciones derivado de la aplicación
+
+El planificador **no necesita inferir las relaciones de los 104 BO desde los CSV**. Se incorporó `client/bo-master-model.ts`, generado a partir de los `entity.json` incluidos en las dos exportaciones que proporcionó el usuario:
+
+- `BNCR_CREDIT_APPROVAL_UUID_SUPPORT_MIGRADO_V5`
+- `BNCR_CREDIT_APPROVAL 3.0.37`
+
+Se comprobó que ambas exportaciones comparten **104 objetos** y **96 relaciones salientes declaradas** (`mappingField` → `targetEntity`). El repositorio público solo contiene el **nombre del objeto y los campos de relación**, sin filas de clientes, configuración secreta ni credenciales. Para un BO reconocido, estas relaciones del modelo tienen prioridad sobre las inferencias por nombre de columna. La inferencia se reserva a objetos futuros que no formen parte del modelo.
+
+**Publicar en Oracle → Mapa visual:** puedes cambiar entre *BO seleccionados para publicar* y *Modelo completo: 104 BO y 96 relaciones*. Las flechas verdes muestran las relaciones reales por ID. Las flechas grises discontinuas muestran únicamente preferencias de orden de importación.
+
+Ejemplos del modelo:
+- `AbsenceCatalogue.absenceTypeCatalogue → AbsenceTypeCatalogue.id`
+- `AbsenceCatalogue.absenceLapseCatalogue → AbsenceLapseCatalogue.id`
+- `AppraisalUsed.cases → Cases.id`
+- `ProcessStageProcess.process → Process.id`
+- `ProcessStageProcess.processStages → ProcessStages.id`
+
+Por preferencia funcional, se carga `AbsenceTypeCatalogue` antes de `AbsenceLapseCatalogue`; **NO existe una FK directa entre estos dos catálogos**. Ambos deben cargarse antes de `AbsenceCatalogue`.
+
+El mismo mapa maestro se aplica a la selección automática de padres, el orden por etapas, la validación de referencias por ID y el remapeo de llaves foráneas. Si un objeto futuro no está en ese modelo, se usa su definición declarada en el ZIP; solo cuando tampoco exista, se intenta inferir por coincidencia exacta de columna y se marca la relación como inferida para revisión.
+
