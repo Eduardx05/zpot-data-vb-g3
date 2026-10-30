@@ -4,8 +4,9 @@
  */
 type ZpotRelation={field:string;target:string;name?:string;delete?:string};
 type ZpotEdge={parent:string;child:string;field:string;name?:string};
-type ZpotPlan={stages:string[][];edges:ZpotEdge[];external:ZpotEdge[];selfReferences:ZpotEdge[];cycles:string[][];unplanned:string[];order:string[]};
-function dependencyPlan(selected:readonly string[],outgoing:Record<string,readonly ZpotRelation[]>):ZpotPlan{
+type ZpotOrderRule={before:string;after:string;label?:string};
+type ZpotPlan={stages:string[][];edges:ZpotEdge[];orderEdges:ZpotEdge[];external:ZpotEdge[];selfReferences:ZpotEdge[];cycles:string[][];unplanned:string[];order:string[]};
+function dependencyPlan(selected:readonly string[],outgoing:Record<string,readonly ZpotRelation[]>,rules:readonly ZpotOrderRule[]=[]):ZpotPlan{
  const nodes=[...new Set(selected.filter(n=>/^[A-Za-z][A-Za-z0-9_]*$/.test(n)))].sort();
  const set=new Set(nodes),edges:ZpotEdge[]=[],external:ZpotEdge[]=[],selfReferences:ZpotEdge[]=[];
  const seen=new Set<string>(),requirements=new Map(nodes.map(n=>[n,new Set<string>()])),children=new Map(nodes.map(n=>[n,new Set<string>()]));
@@ -16,6 +17,16 @@ function dependencyPlan(selected:readonly string[],outgoing:Record<string,readon
   if(r.target===child){selfReferences.push(edge);continue}
   if(!set.has(r.target)){external.push(edge);continue}
   edges.push(edge);requirements.get(child)!.add(r.target);children.get(r.target)!.add(child);
+ }
+ // Explicit business precedence is NOT a foreign key. Keep it separate from edges
+ // so neither the diagram nor FK verification treats it as a database relation.
+ const orderEdges:ZpotEdge[]=[];
+ for(const rule of rules){
+  if(!set.has(rule.before)||!set.has(rule.after)||rule.before===rule.after)continue;
+  if(requirements.get(rule.after)!.has(rule.before))continue;
+  requirements.get(rule.after)!.add(rule.before);
+  children.get(rule.before)!.add(rule.after);
+  orderEdges.push({parent:rule.before,child:rule.after,field:'Orden de carga',name:rule.label||'Precedencia de negocio (no es FK)'});
  }
  const indegree=new Map(nodes.map(n=>[n,requirements.get(n)!.size])),stages:string[][]=[];
  let ready=nodes.filter(n=>indegree.get(n)===0);
@@ -41,7 +52,7 @@ function dependencyPlan(selected:readonly string[],outgoing:Record<string,readon
   }
  };
  for(const n of unplanned)if(!index.has(n))visit(n);
- return {stages,edges,external,selfReferences,cycles,unplanned,order:stages.flat()};
+ return {stages,edges,orderEdges,external,selfReferences,cycles,unplanned,order:stages.flat()};
 }
 (globalThis as typeof globalThis & {ZPOTDependencyPlanner?:typeof dependencyPlan}).ZPOTDependencyPlanner=dependencyPlan;
 
