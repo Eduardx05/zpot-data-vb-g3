@@ -136,3 +136,38 @@ test('fusion is an independent page with ZIP/JSON download and explicit handoff 
  assert.match(ui,/PUB\.mode='sync'/);
  assert.doesNotMatch(ui,/fetch\([^\n]*method:\s*'POST'/);
 });
+
+test('identical child row IDs are not deduplicated if their parent Cases namespaces diverge',()=>{
+ const result=json(engine()({
+  oldTables:{
+   Cases:table([{id:'1',opportunityNumber:'LEGACY-CASE'}]),
+   CaseStage:table([{id:'5',cases:'1',stage:'ANALYSIS'}])
+  },
+  newTables:{
+   Cases:table([{id:'1',opportunityNumber:'NEW-CASE'}]),
+   CaseStage:table([{id:'5',cases:'1',stage:'ANALYSIS'}])
+  },
+  relations:{CaseStage:[{field:'cases',target:'Cases'}]}
+ }));
+ assert.equal(result.tables.CaseStage.rows.length,2);
+ assert.notEqual(result.tables.CaseStage.rows[0].cases,result.tables.CaseStage.rows[1].cases);
+ assert.equal(result.totals.blocking,0);
+});
+
+test('a unique numeric FK is never used to merge distinct records from different applications',()=>{
+ const result=json(engine()({
+  oldTables:{
+   Cases:table([{id:'1',opportunityNumber:'OLD'}]),
+   InvestmenPlan:table([{id:'10',cases:'1',value:'old plan'}])
+  },
+  newTables:{
+   Cases:table([{id:'1',opportunityNumber:'NEW'}]),
+   InvestmenPlan:table([{id:'11',cases:'1',value:'new plan'}])
+  },
+  relations:{InvestmenPlan:[{field:'cases',target:'Cases'}]},
+  uniqueKeys:{InvestmenPlan:[{name:'cases',type:'number'}]}
+ }));
+ assert.equal(result.tables.InvestmenPlan.rows.length,2);
+ assert.notEqual(result.tables.InvestmenPlan.rows[0].cases,result.tables.InvestmenPlan.rows[1].cases);
+ assert.equal(result.totals.blocking,0);
+});
