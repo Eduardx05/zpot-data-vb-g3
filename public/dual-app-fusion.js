@@ -43,7 +43,7 @@
    <div class="actions"><button class="btn btn-primary" id="fusion-analyze" ${!good||F.busy?'disabled':''}>Analizar y generar vista previa</button></div>
    <div id="fusion-status" class="notice">${F.busy?'Analizando tablas de los dos ZIP…':result?'Análisis completado. Revisa los conflictos y selecciona el destino.':'Selecciona ambos ZIP para comenzar.'}</div>`);
   if(result){
-   const m=result.totals;
+   const m=result.totals,d=F.delta?.totals||{existing:0,unchanged:0,updates:0,inserts:0,totalWrites:0};
    html+=block('3 · Resultado previo',`
     <div class="metrics">
      <div class="metric"><div class="metric-label">Filas en ZIP antiguo</div><div class="metric-number">${fmt(m.old)}</div></div>
@@ -52,6 +52,13 @@
      <div class="metric"><div class="metric-label">Incidencias bloqueantes</div><div class="metric-number">${fmt(m.blocking)}</div></div>
     </div>
     <div class="chips">${badge(fmt(m.added)+' nuevas','teal')} ${badge(fmt(m.matched)+' conciliadas','ok')} ${badge(fmt(m.collisions)+' IDs reasignados','amber')} ${badge(fmt(m.missingReferences)+' referencias sin resolver',m.missingReferences?'danger':'ok')}</div>
+    <div class="notice"><strong>Publicación diferencial — no volver a cargar el ZIP A.</strong>
+    ${fmt(d.existing)} filas del ZIP A identificadas como existentes. ${fmt(d.unchanged)} permanecen sin cambios.
+    Solo hay que preparar <strong>${fmt(d.inserts)} inserciones</strong> y <strong>${fmt(d.updates)} actualizaciones</strong>
+    (${fmt(d.totalWrites)} escrituras), en lugar de republicar todo el ZIP consolidado.</div>
+    <details><summary>Ver operaciones diferenciales por BO</summary><div class="table-wrap"><table><thead><tr><th>BO</th><th>Ya en Oracle</th><th>Sin cambio</th><th>PATCH</th><th>POST</th></tr></thead><tbody>
+     ${(F.delta?.report||[]).filter(x=>x.updates||x.inserts).map(x=>'<tr><td>'+safe(x.object)+'</td><td>'+fmt(x.baseline)+'</td><td>'+fmt(x.unchanged)+'</td><td>'+fmt(x.updates)+'</td><td>'+fmt(x.inserts)+'</td></tr>').join('')}
+    </tbody></table></div></details>
     ${m.blocking?'<div class="notice danger"><strong>Existen incidencias que requieren revisión.</strong> Se permite exportar un ZIP de diagnóstico, pero no prepararlo para publicación hasta resolver las referencias y los conflictos.</div>':'<div class="notice success"><strong>Prevalidación sin errores bloqueantes.</strong> Revisa igualmente las reglas de identidad y el esquema del destino antes de publicar.</div>'}
     <div class="search-line"><input id="fusion-filter" placeholder="Filtrar BO por nombre" value="${safe(F.filter)}"/><label class="check-inline"><input id="fusion-only-issues" type="checkbox" ${F.issuesOnly?'checked':''}/> Solo con incidencias</label></div>
     <div id="fusion-tables">${tablesHtml(result)}</div>
@@ -67,11 +74,12 @@
        <option value="oracle" ${F.destination==='oracle'?'selected':''}>Preparar envío a OIC Desarrollo mediante el publicador actual</option>
       </select>
      </label>
-     <div class="notice">${F.destination==='oracle'?'<strong>Destino permitido:</strong> OIC Desarrollo, aplicación BNCR_CREDIT_APPROVAL_2026_GEN3_V2 (Live de desarrollo). La página de fusión no enviará datos directamente: abrirá el publicador existente, con GET de prueba y confirmación de escritura.':'<strong>Exportación local:</strong> un ZIP con CSV por Business Object y un JSON con equivalencias por origen, conflictos, reglas y conteos. Su importación mediante Data Manager debe evaluarse cuidadosamente; no sustituye la publicación diferencial por PATCH.'}</div>
+     <div class="notice">${F.destination==='oracle'?'<strong>Destino permitido:</strong> OIC Desarrollo (Live de desarrollo). Solo se traspasa el ZIP diferencial. El ZIP A queda intacto; se abrirá el publicador existente con confirmación y GET de prueba, sin enviar nada directamente.':'<strong>Exportación local:</strong> descarga el ZIP consolidado completo para revisión o el ZIP diferencial con SOLO las filas a insertar/actualizar. El último es el preparado para el publicador; no uses Data Manager en modo reemplazo para esta tarea.'}</div>
      <div class="actions">
-      <button class="btn btn-primary" id="fusion-download" ${F.busy?'disabled':''}>Descargar ZIP consolidado${m.blocking?' (diagnóstico)':''}</button>
-      <button class="btn" id="fusion-json" ${F.busy?'disabled':''}>Descargar auditoría JSON</button>
-      ${F.destination==='oracle'?'<button class="btn btn-primary" id="fusion-publish" '+(m.blocking||F.busy?'disabled':'')+'>Preparar publicación en Oracle</button>':''}
+      <button class="btn" id="fusion-download" ${F.busy?'disabled':''}>ZIP consolidado completo${m.blocking?' (diagnóstico)':''}</button>
+      <button class="btn btn-primary" id="fusion-download-delta" ${F.busy||!F.delta?.totals.totalWrites?'disabled':''}>ZIP diferencial (solo POST/PATCH)${m.blocking?' — revisión':''}</button>
+      <button class="btn" id="fusion-json" ${F.busy?'disabled':''}>Auditoría JSON + decisiones</button>
+      ${F.destination==='oracle'?'<button class="btn btn-primary" id="fusion-publish" '+(m.blocking||F.busy||!F.baselineConfirmed||!F.delta?.totals.totalWrites?'disabled':'')+'>Preparar solo cambios en Oracle</button>':''}
      </div>
      <p class="footnote">La publicación es una operación separada. El ZIP generado no borra datos y no implica que los conflictos de unicidad del destino estén resueltos; el publicador debe validarlos contra Oracle.</p>`);
   }
