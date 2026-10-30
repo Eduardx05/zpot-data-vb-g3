@@ -522,8 +522,8 @@ function pubRebuildIdSets(obj,validTables,kind){
 async function pubUpgradeLegacyAudit(raw){
  if(!raw||raw.format!=='BNCR-ZPOT-Oracle-BO-API-v3'||raw.resumeState)
   throw Error('No es una auditoría antigua BNCR v3.');
- if(!['sync','update'].includes(raw.mode)||!raw.preserveIds)
-  throw Error('La auditoría antigua no corresponde a una carga PATCH por ID.');
+ if(!['sync','update','create'].includes(raw.mode)||!raw.preserveIds)
+  throw Error('La auditoría antigua no contiene IDs suficientes para reanudar.');
  if(raw.url!==pubUrlTemplate(PUB.url)||!pubIsConfirmedDevTarget(raw.url))
   throw Error('El JSON de auditoría pertenece a otro endpoint Oracle.');
  if(!Array.isArray(raw?.sources)||!raw.sources.length||
@@ -549,7 +549,12 @@ async function pubUpgradeLegacyAudit(raw){
  // what cannot be independently proven and require the same physical ZIPs.
  if(!window.confirm('AUDITORÍA ANTIGUA SIN CHECKPOINT\nEste JSON no guardaba hashes de ZIP ni configuración completa. Se han reconocido los nombres de los archivos, pero NO se puede probar que su contenido sea idéntico.\n\nConfirma que has cargado exactamente los ZIP originales, con el mismo límite y modo de consolidación. ZPOT verificará el total, etapas e IDs; no deducirá equivalencias de errores. ¿Continuar?'))return null;
  consolidation=new Set(sourceIndexes);conSchema=schemaIndex;
- PUB.tableSet=new Set(allTableNames);PUB.mode=raw.mode;PUB.preserveIds=true;
+ PUB.tableSet=new Set(allTableNames);
+ // Legacy POST audit is a source of confirmed ID mappings, NOT permission to
+ // send another POST. All replays are converted to ID-first PATCH/sync.
+ PUB.mode=raw.mode==='update'?'update':'sync';
+ PUB.preserveIds=true;
+ if(raw.tables?.some(t=>Number(t.planned)>1000))PUB.limit='ALL';
  PUB.skipConflicts=raw.skipConflicts!==false;
  const plan=pubGetPlan();
  if(JSON.stringify(plan.stages)!==JSON.stringify(raw.plan.stages))
@@ -615,7 +620,7 @@ async function pubUpgradeLegacyAudit(raw){
    tables:(raw.tables||[]).map(tab=>({...tab,failed:0})),
    skippedRecords:skipRows,
    idMappings:registry.snapshot(),
-   recoveryFromLegacyAudit:true,
+   recoveryFromLegacyAudit:true,originalMode:raw.mode,mode:PUB.mode,
    recoveredAt:new Date().toISOString(),outcome:'paused'};
  const state={
   version:1,format:PUB_CHECKPOINT_FORMAT,url:raw.url,
@@ -728,6 +733,9 @@ async function pubSend(){
  try{
    const base=pubUrlTemplate(PUB.url),plan=pubGetPlan(),tables=pubSelectedTables(),signature=pubRunSignature();
    if(!tables.length)throw Error('Selecciona al menos un Business Object.');
+   if(['create','upsert'].includes(PUB.mode)&&(
+       PUB.restoredCount>0||Object.keys(session?.idMap?.snapshot?.()||{}).length>0))
+     throw Error('Hay equivalencias de IDs importadas o confirmadas. No se permite POST/Upsert: cambia a «Por ID: PATCH existente / POST nuevo (solo 404)» para evitar duplicados.');
    if(!session?.authorized&&(!PUB.approved||$('pub-confirm-phrase')?.value!=='CARGAR DESARROLLO'))
      throw Error('Confirma el respaldo y escribe CARGAR DESARROLLO exactamente una vez para este plan.');
    if(!PUB.testPassed||PUB.testedUrl!==base||PUB.testedAuth!==PUB.auth)throw Error('Primero verifica la lectura GET con la URL y autenticación elegidas.');
@@ -1034,8 +1042,11 @@ $('main').addEventListener('change',async e=>{let x=e.target;
    if(!loaded)throw Error('El reporte no contiene equivalencias de IDs para importar.');
    PUB.restoredMappings=registry.snapshot();PUB.restoredCount=loaded;
    PUB.restoredFrom=file.name.slice(0,120);PUB.restoredVersion++;PUB.stageSession=null;PUB.results=null;
+   // A prior POST-only import must not be replayed as POST with a restored
+   // source->Oracle mapping. The mapped Oracle ID always wins.
+   PUB.mode='sync';
    render();
-   pubSetStatus('Importadas '+loaded+' equivalencias verificadas del mismo endpoint. Los registros existentes se actualizarán con PATCH.','ok');
+   pubSetStatus('Importadas '+loaded+' equivalencias del mismo endpoint. Modo cambiado automáticamente a sincronización por ID (GET → PATCH o POST solo para registros nuevos). El POST antiguo no se repetirá.','ok');
   }catch(error){pubSetStatus('No se importó el mapa: '+error.message,'danger');}
   finally{x.value='';}
   return;
@@ -1063,7 +1074,12 @@ $('main').addEventListener('change',async e=>{let x=e.target;
  if(x.id==='pub-map-scope'){PUB.mapScope=x.value==='master'?'master':'selected';PUB.focusObject='ALL';render();return}
  if(x.id==='pub-map-focus'){PUB.focusObject=x.value;render();return}
  if(x.id==='pub-url'){PUB.url=x.value.trim();PUB.testPassed=false;let badge=$('pub-test-result');if(badge){badge.textContent='Conexión pendiente de nueva verificación';badge.className='badge amber'}}
- if(x.id==='pub-mode')PUB.mode=x.value;
+ if(x.id==='pub-mode'){
+  if(['create','upsert'].includes(x.value)&&PUB.restoredCount>0){
+   PUB.mode='sync';x.value='sync';
+   pubSetStatus('No puedes usar POST directo con '+PUB.restoredCount+' equivalencias importadas. Usa GET → PATCH/POST por ID para evitar duplicados.','danger');
+  }else PUB.mode=x.value;
+ }
  if(x.id==='pub-auth'){PUB.auth=x.value;PUB.testPassed=false;}
  if(x.id==='pub-test-object'){PUB.testObject=x.value.trim();PUB.testPassed=false;}
  if(x.id==='pub-limit')PUB.limit=x.value;
