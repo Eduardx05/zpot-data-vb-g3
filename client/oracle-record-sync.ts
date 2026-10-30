@@ -19,7 +19,7 @@ async function syncOracleRecordById(
 ):Promise<ZpotSyncResult>{
  const valid=(value:unknown):string=>{
   const key=String(value??'').trim();
-  if(!key||!/^[A-Za-z0-9._~-]+$/.test(key))throw Error('ID inválido para publicación de Business Object.');
+  if(!key||!/^[A-Za-z0-9._~-]+$/.test(key))throw Error('ID original o de Oracle inválido para publicación de Business Object.');
   return key;
  };
  const source=valid(sourceId);
