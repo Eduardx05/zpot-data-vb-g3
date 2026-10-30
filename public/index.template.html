@@ -521,6 +521,12 @@ async function pubSend(){
 }
 
 $('main').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)return;
+ if(b.id==='pub-map-import'){if(!PUB.busy)$('pub-map-file')?.click();return}
+ if(b.id==='pub-map-clear'){
+  if(PUB.busy||PUB.stageSession?.report?.success){pubSetStatus('Descarga la auditoría y restablece el plan antes de cambiar las equivalencias.','danger');return}
+  PUB.restoredMappings=null;PUB.restoredCount=0;PUB.restoredFrom='';PUB.restoredVersion++;
+  PUB.stageSession=null;PUB.results=null;render();pubSetStatus('Equivalencias importadas descartadas.','ok');return;
+ }
  if(b.id==='pub-test'){pubTest();return}
  if(b.id==='pub-preview'){pubPreview(false);return}
  if(b.id==='pub-json-preview'){pubPreview(true);return}
@@ -550,7 +556,28 @@ $('main').addEventListener('click',e=>{let b=e.target.closest('button');if(!b)re
  if(b.id==='pub-reset'){if(PUB.busy)return;const started=!!PUB.stageSession?.report?.success; if(started&&!window.confirm('Ya se enviaron registros a Oracle. Restablecer el plan NO los elimina ni revierte. Verifica IDs y concilia la carga antes de repetir. ¿Continuar?'))return;PUB.stageSession=null;PUB.results=null;render();setMsg('Plan reiniciado; no se efectuó rollback en Oracle.','warn');return}
  if(b.id==='pub-report'&&PUB.results){downloadJSON('BNCR_AUDITORIA_ENVIO_ORACLE_'+new Date().toISOString().slice(0,10)+'.json',PUB.results);return}
 });
-$('main').addEventListener('change',e=>{let x=e.target;
+$('main').addEventListener('change',async e=>{let x=e.target;
+ if(x.id==='pub-map-file'){
+  const file=x.files?.[0];if(!file)return;
+  try{
+   if(PUB.busy||PUB.stageSession?.report?.success)throw Error('Restablece el plan y descarga la auditoría antes de importar otro mapa.');
+   if(file.size>25*1024*1024)throw Error('Reporte demasiado grande (máximo 25 MB).');
+   const report=JSON.parse(await file.text());
+   const base=pubUrlTemplate(PUB.url);
+   if(!report||!/^BNCR-ZPOT-Oracle-BO-API-v[0-9]+$/.test(String(report.format||''))||report.url!==base)
+    throw Error('La auditoría no corresponde a este endpoint de Oracle Desarrollo.');
+   if(!window.ZPOTOracleIdTools)throw Error('Módulo de IDs no disponible.');
+   const registry=window.ZPOTOracleIdTools.createRegistry();
+   const loaded=registry.load(report.idMappings);
+   if(!loaded)throw Error('El reporte no contiene equivalencias de IDs para importar.');
+   PUB.restoredMappings=registry.snapshot();PUB.restoredCount=loaded;
+   PUB.restoredFrom=file.name.slice(0,120);PUB.restoredVersion++;PUB.stageSession=null;PUB.results=null;
+   render();
+   pubSetStatus('Importadas '+loaded+' equivalencias verificadas del mismo endpoint. Los registros existentes se actualizarán con PATCH.','ok');
+  }catch(error){pubSetStatus('No se importó el mapa: '+error.message,'danger');}
+  finally{x.value='';}
+  return;
+ }
  if(x.matches('[data-pub-source]')){const i=Number(x.dataset.pubSource);if(x.checked){if(!D[i]?.isDemo)for(const j of [...consolidation])if(D[j]?.isDemo)consolidation.delete(j);consolidation.add(i)}else consolidation.delete(i);if(consolidation.size===1)conSchema=[...consolidation][0];saveLocal();render();return}
  if(x.matches('[data-pub-table]')){
   if(PUB.busy){render();return}
