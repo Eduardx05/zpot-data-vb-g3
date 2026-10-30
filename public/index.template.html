@@ -128,12 +128,20 @@ function pubSelectedTables(){return [...PUB.tableSet].filter(x=>consolidation.si
 function pubAvailable(){return [...new Set([...consolidation].flatMap(i=>Object.keys(D[i].tables||{})))].filter(allowTable).sort((a,b)=>a.localeCompare(b,'es'));}
 function pubSetStatus(message,kind=''){let e=$('pub-status');if(e){e.textContent=message;e.className='notice'+(kind==='danger'?' danger':kind==='ok'?' success':'');}}
 function pubRowPreview(){let list=pubSelectedTables();return list.length?`${list.length} objeto(s) seleccionados · ${list.reduce((n,t)=>n+[...consolidation].reduce((s,i)=>s+(D[i].tables?.[t]?.count||0),0),0).toLocaleString('es')} filas de origen (antes de deduplicar).`:'Sin objetos seleccionados. Puedes empezar con un catálogo pequeño.'}
+// Business-requested import precedence, NOT a foreign key: both catalogs are
+// independent, but AbsenceType must be loaded before AbsenceLapse for this pass.
+const PUB_IMPORT_ORDER_RULES=[{before:'AbsenceTypeCatalogue',after:'AbsenceLapseCatalogue',label:'Orden solicitado (no es FK)'}];
 function pubRelationships(names){
  const candidates=[D[conSchema],...[...consolidation].map(i=>D[i]),...D].filter(Boolean);
+ const available=[...new Set([...pubAvailable(),...names])];
  const relations={};
  for(const name of names){
   const first=candidates.find(d=>Array.isArray(d.tables?.[name]?.outgoing)&&d.tables[name].outgoing.length);
-  relations[name]=first?.tables[name]?.outgoing||KNOWN[name]?.outgoing||[];
+  const declared=first?.tables[name]?.outgoing||KNOWN[name]?.outgoing||[];
+  if(declared.length){relations[name]=declared;continue}
+  const source=candidates.find(d=>d.tables?.[name]?.columns?.length||d.tables?.[name]?.fields?.length);
+  const fields=source?.tables[name]?.columns?.length?source.tables[name].columns:source?.tables[name]?.fields||KNOWN[name]?.fields||[];
+  relations[name]=typeof window.ZPOTDependencyInference==='function'?window.ZPOTDependencyInference(name,fields,available):[];
  }
  return relations;
 }
@@ -150,7 +158,7 @@ function pubIncludeParents(){
 function pubGetPlan(){
  const names=pubSelectedTables();
  if(typeof window.ZPOTDependencyPlanner!=='function')throw Error('No se cargó el planificador de relaciones. Recarga la aplicación.');
- return window.ZPOTDependencyPlanner(names,pubRelationships(names));
+ return window.ZPOTDependencyPlanner(names,pubRelationships(names),PUB_IMPORT_ORDER_RULES);
 }
 function pubRunSignature(){return JSON.stringify({tables:pubSelectedTables(),sources:[...consolidation].sort((a,b)=>a-b).map(i=>D[i]?.sha),schema:conSchema,schemaMode,includeMode,limit:PUB.limit,mode:PUB.mode,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,url:PUB.url});}
 function pubRelationDiagram(plan){
