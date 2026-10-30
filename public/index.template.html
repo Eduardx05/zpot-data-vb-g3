@@ -458,6 +458,141 @@ function pubCanSkipIssue(error){
  // without an HTTP status; never silently continue for runtime/network faults.
  return /^(?:Hay varias coincidencias|La clave única|Colisión de IDs|Conflicto de identidad|Oracle rechazó la clave única|Varias filas de Oracle coinciden|Las claves únicas.*distintos IDs|No se ha revisado la colección completa|No se pudo revisar completamente)/i.test(String(error?.message||''));
 }
+// Portable recovery checkpoint for the exact ZIP sources, schema and plan.
+// Contains IDs and audit metadata, never Oracle bearer credentials or passwords.
+const PUB_CHECKPOINT_FORMAT='BNCR-ZPOT-RESUME-v1';
+function pubRecoveryFingerprint(){
+ return JSON.stringify({
+  endpoint:pubUrlTemplate(PUB.url),
+  sourceHashes:[...consolidation].map(i=>String(D[i]?.sha||'')).sort(),
+  schemaHash:String(D[conSchema]?.sha||''),
+  tables:pubSelectedTables(),
+  schemaMode,includeMode,
+  mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,
+  includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts
+ });
+}
+function pubCheckpointState(session){
+ return {
+  version:1,format:PUB_CHECKPOINT_FORMAT,savedAt:new Date().toISOString(),
+  url:session.report.url,fingerprint:pubRecoveryFingerprint(),
+  sourceHashes:[...consolidation].map(i=>String(D[i]?.sha||'')).sort(),
+  schemaHash:String(D[conSchema]?.sha||''),
+  tables:pubSelectedTables(),schemaMode,includeMode,
+  mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,
+  includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,stepMode:PUB.stepMode,
+  stages:session.plan.stages.map(stage=>[...stage]),
+  rowCounts:Object.fromEntries([...session.packs].map(([name,pack])=>[name,pack.rows.length])),
+  cursor:{...session.cursor},nextStage:session.nextStage,
+  successfulIds:Object.fromEntries([...session.successfulIds].map(([table,ids])=>[table,[...ids]])),
+  skippedIds:Object.fromEntries([...session.skippedIds].map(([table,ids])=>[table,[...ids]])),
+  idMappings:session.idMap.snapshot(),
+  unsafeRetry:Boolean(session.unsafeRetry),
+  inFlight:Boolean(session.inFlight),
+  outcome:session.report.outcome||'in-progress'
+ };
+}
+function pubRefreshCheckpoint(session){
+ session.report.idMappings=session.idMap.snapshot();
+ session.report.resumeState=pubCheckpointState(session);
+ session.report.resumeCursor={...session.cursor};
+ return session.report.resumeState;
+}
+function pubDownloadCheckpoint(session){
+ if(!session)throw Error('No hay sesión activa para guardar una recuperación.');
+ const state=pubRefreshCheckpoint(session);
+ const report={...session.report};
+ downloadJSON('BNCR_REANUDAR_ETAPA_'+Math.min(state.cursor.stageIndex+1,state.stages.length)+'_'+new Date().toISOString().slice(0,10)+'.json',
+  {format:PUB_CHECKPOINT_FORMAT,state,report});
+}
+function pubRebuildIdSets(obj,validTables,kind){
+ if(!obj||typeof obj!=='object'||Array.isArray(obj))throw Error('El JSON no contiene '+kind+' válido.');
+ const result=new Map();
+ for(const [table,ids] of Object.entries(obj)){
+  if(!validTables.has(table)||!Array.isArray(ids)||ids.some(id=>typeof id!=='string'||!/^[A-Za-z0-9._~-]+$/.test(id)))
+   throw Error('IDs inválidos en '+kind+': '+table);
+  if(new Set(ids).size!==ids.length)throw Error('IDs repetidos en '+kind+': '+table);
+  result.set(table,new Set(ids));
+ }
+ return result;
+}
+async function pubResumeFromJson(raw){
+ if(PUB.busy)throw Error('Detén la publicación actual antes de recuperar un JSON.');
+ if(PUB.stageSession?.report?.success)throw Error('Descarga el reporte actual y restablece el plan antes de cargar otra recuperación.');
+ const state=raw?.format===PUB_CHECKPOINT_FORMAT?raw.state:raw?.resumeState;
+ const report=raw?.format===PUB_CHECKPOINT_FORMAT?raw.report:raw;
+ if(!state||state.format!==PUB_CHECKPOINT_FORMAT||state.version!==1||!report||report.url!==state.url)
+  throw Error('Este archivo no contiene un punto de recuperación compatible. Un reporte antiguo sin resumeState solo permite importar el mapa de IDs.');
+ if(state.unsafeRetry||state.inFlight||state.outcome==='manual-reconciliation-required')
+  throw Error('El JSON registra una escritura cuyo resultado no pudo confirmarse. Revisa ese ID contra Oracle antes de intentar otra publicación.');
+ if(state.url!==pubUrlTemplate(PUB.url)||!pubIsConfirmedDevTarget(state.url))
+  throw Error('El JSON corresponde a un endpoint diferente. Solo se puede recuperar en el mismo OIC Desarrollo.');
+ if(!Array.isArray(state.sourceHashes)||!state.sourceHashes.length||state.sourceHashes.some(hash=>typeof hash!=='string'||!hash))
+  throw Error('El JSON no contiene identificadores válidos de los ZIP.');
+ const available=new Map(D.map((item,index)=>[String(item.sha||''),index]));
+ const sourceIndexes=state.sourceHashes.map(hash=>available.get(hash));
+ if(sourceIndexes.some(index=>index===undefined)||new Set(sourceIndexes).size!==sourceIndexes.length)
+  throw Error('Faltan ZIP de la carga original. Vuelve a cargarlos en ZPOT y selecciona de nuevo el JSON.');
+ const schemaIndex=available.get(state.schemaHash);
+ if(schemaIndex===undefined||!sourceIndexes.includes(schemaIndex))throw Error('Falta el ZIP del esquema original.');
+ if(!Array.isArray(state.tables)||state.tables.some(t=>typeof t!=='string')||!['sync','update'].includes(state.mode))
+  throw Error('La recuperación por ID solo es compatible con PATCH o sincronización segura.');
+ if(!['1','5','25','100','500','1000','ALL'].includes(String(state.limit))||
+    !['base','union','intersection'].includes(state.schemaMode)||typeof state.includeMode!=='string')
+  throw Error('Configuración de consolidación incompatible con este JSON.');
+ if(!state.preserveIds)throw Error('El punto de recuperación no conserva los IDs originales.');
+ // Restore the exact read-only plan configuration first; no request is sent.
+ consolidation=new Set(sourceIndexes);conSchema=schemaIndex;
+ schemaMode=state.schemaMode;includeMode=state.includeMode;
+ PUB.tableSet=new Set(state.tables);PUB.mode=state.mode;PUB.limit=String(state.limit);
+ PUB.preserveIds=true;PUB.includeEmpty=Boolean(state.includeEmpty);
+ PUB.skipConflicts=Boolean(state.skipConflicts);PUB.stepMode=Boolean(state.stepMode);
+ if(pubRecoveryFingerprint()!==state.fingerprint)throw Error('La selección, los ZIP o el esquema difieren del JSON original.');
+ const plan=pubGetPlan();
+ if(JSON.stringify(plan.stages)!==JSON.stringify(state.stages))
+  throw Error('El orden de dependencias ha cambiado respecto a la carga original. No se reanudará automáticamente.');
+ const packs=new Map();
+ for(const table of plan.order){
+  const pack=await pubConsolidated(table);
+  pack.rows=window.ZPOTOracleIdTools.sortSelfRows(table,pack.rows,pubRelationships([table])[table]||[]);
+  if(pack.rows.length!==state.rowCounts?.[table])throw Error('Cambió la cantidad de filas de '+table+' respecto al JSON.');
+  packs.set(table,pack);
+ }
+ const cursor=state.cursor,nextStage=state.nextStage;
+ if(!cursor||!Number.isInteger(cursor.stageIndex)||!Number.isInteger(cursor.tableIndex)||!Number.isInteger(cursor.rowIndex)||
+    !Number.isInteger(nextStage)||cursor.stageIndex!==nextStage||nextStage<0||nextStage>=plan.stages.length||
+    cursor.tableIndex<0||cursor.tableIndex>plan.stages[nextStage].length||cursor.rowIndex<0)
+  throw Error('Posición de reanudación inválida en el JSON.');
+ if(cursor.tableIndex<plan.stages[nextStage].length){
+  const table=plan.stages[nextStage][cursor.tableIndex];
+  if(cursor.rowIndex>packs.get(table).rows.length)throw Error('La posición de fila supera el total de '+table+'.');
+ }else if(cursor.rowIndex!==0)throw Error('El cursor después del último BO debe apuntar a la fila cero.');
+ const validTables=new Set(plan.order);
+ const successfulIds=pubRebuildIdSets(state.successfulIds,validTables,'registros confirmados');
+ const skippedIds=pubRebuildIdSets(state.skippedIds,validTables,'registros omitidos');
+ for(const table of plan.order){
+  const allowed=new Set(packs.get(table).rows.map(row=>String(row.id??'').trim()));
+  for(const id of successfulIds.get(table)||[])if(!allowed.has(id))throw Error('El JSON confirma un ID ajeno a los ZIP: '+table+' '+id);
+  for(const id of skippedIds.get(table)||[])if(!allowed.has(id)||successfulIds.get(table)?.has(id))
+   throw Error('Inconsistencia de IDs confirmados/omitidos en '+table+' ID '+id);
+ }
+ const idMap=window.ZPOTOracleIdTools.createRegistry();
+ idMap.load(state.idMappings||{});
+ if(!Number.isInteger(report.success)||report.success<0||!Array.isArray(report.stages)||!Array.isArray(report.tables)||
+    !Array.isArray(report.errors)||!Array.isArray(report.operations)||report.total!==[...packs.values()].reduce((n,p)=>n+p.rows.length,0))
+  throw Error('La auditoría JSON está incompleta o no coincide con los CSV.');
+ const restored={signature:pubRunSignature(),plan,packs,report,nextStage,
+  failed:false,unsafeRetry:false,inFlight:false,authorized:false,
+  cursor:{...cursor},successfulIds,skippedIds,checkedReferences:new Set(),idMap};
+ pubRefreshCheckpoint(restored);
+ PUB.stageSession=restored;PUB.results=restored.report;
+ PUB.testPassed=false;PUB.approved=false;
+ render();
+ pubSetStatus('JSON cargado: etapa '+(nextStage+1)+'/'+plan.stages.length+
+  ', BO '+(plan.stages[nextStage][cursor.tableIndex]||'(siguiente etapa)')+
+  ', fila '+(cursor.rowIndex+1)+'. Confirma GET y autoriza una vez para continuar.','ok');
+ return restored;
+}
 async function pubSend(){
  if(PUB.busy)return;
  pubFromInputs();
