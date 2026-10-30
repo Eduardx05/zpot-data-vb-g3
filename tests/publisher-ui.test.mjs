@@ -14,6 +14,15 @@ test('publisher template JavaScript compiles and includes bulk selection/recalcu
  assert.ok(compiled>=2,'expected inline application and publisher scripts');
  assert.match(html,/id="pub-select-all"/);
  assert.match(html,/id="pub-recalculate"/);
+ assert.match(html,/id="pub-map-import"/);
+ assert.match(html,/id="pub-map-file"/);
+ assert.match(html,/id="pub-map-clear"/);
+ assert.match(html,/Solo PATCH · actualizar IDs existentes, sin crear/);
+ assert.match(html,/mappedTargetId:session\.idMap\.get\(t,sourceId\)/);
+ assert.match(html,/delete patchPayload\.id/);
+ assert.match(html,/PUB\.restoredMappings=registry\.snapshot\(\)/);
+ assert.match(html,/const postBody=JSON\.stringify\(payload\)/);
+ assert.match(html,/const patchBody=JSON\.stringify\(patchPayload\)/);
  assert.match(html,/function pubPlanMarkup\(plan\)/);
  assert.match(html,/new Set\(stage\)/);
  assert.match(html,/const selectedPlan=pubGetPlan\(\)/);
