@@ -19,6 +19,24 @@ function makeOracleIdRegistry(){
   rows.set(src,target);
  };
  const get=(table:string,sourceId:unknown):string|undefined=>data.get(table)?.get(key(sourceId));
+ const load=(snapshot:unknown):number=>{
+  if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw Error('Mapa de IDs inválido.');
+  const entries:Array<[string,string,string]>=[];
+  for(const [table,items] of Object.entries(snapshot)){
+   if(!/^[A-Za-z][A-Za-z0-9_]*$/.test(table)||!items||typeof items!=='object'||Array.isArray(items))
+    throw Error('Objeto inválido dentro del mapa de IDs.');
+   for(const [sourceId,oracleId] of Object.entries(items)){
+    if(!/^[A-Za-z0-9._~-]+$/.test(sourceId)||typeof oracleId!=='string'||!/^[A-Za-z0-9._~-]+$/.test(oracleId))
+     throw Error('Equivalencia de IDs inválida para '+table);
+    const previous=get(table,sourceId);
+    if(previous!==undefined&&previous!==oracleId)throw Error('Conflicto de mapa de IDs: '+table+' origen '+sourceId);
+    entries.push([table,sourceId,oracleId]);
+    if(entries.length>250000)throw Error('El archivo contiene demasiadas equivalencias de IDs.');
+   }
+  }
+  for(const [table,sourceId,oracleId] of entries)put(table,sourceId,oracleId);
+  return entries.length;
+ };
  const rewrite=(row:Record<string,unknown>,outgoing:readonly ZpotBoRelation[])=>{
   const result={...row},replacements:ZpotMappedReference[]=[];
   for(const rel of outgoing){
@@ -41,7 +59,7 @@ function makeOracleIdRegistry(){
   return {row:result,replacements};
  };
  const snapshot=()=>Object.fromEntries([...data].sort(([a],[b])=>a.localeCompare(b)).map(([table,items])=>[table,Object.fromEntries([...items].sort(([a],[b])=>a.localeCompare(b)))]));
- return {put,get,rewrite,snapshot};
+ return {put,get,load,rewrite,snapshot};
 }
 /** Sort parent rows before children for self-referential relations within one BO. */
 function sortRowsBySelfReferences<T extends Record<string,unknown>>(
