@@ -149,3 +149,16 @@ Si `GET /AbsenceTypeCatalogue/1` devuelve `404`, pero Oracle ya contiene el mism
 Si Oracle no admite filtros `q`, el publicador realiza una lectura paginada de respaldo con un límite conservador. Si hay coincidencias ambiguas, datos incompletos, errores de lectura o colisiones con IDs ya asociados a otra fila de origen, **no realiza PATCH ni POST automáticos**. Los errores originales se conservan para revisión. No se hacen coincidencias aproximadas ni por nombres de campos no declarados únicos.
 
 Selecciona **Por ID: PATCH existente / POST nuevo (solo 404)** en el desplegable; los modos heredados `POST` y `Upsert-Mode` no ejecutan esta reconciliación de unicidad. Reinicia Node y fuerza una recarga del navegador tras actualizar el proyecto.
+
+
+### Omitir filas conflictivas y conservar referencias seguras
+
+En **Publicar en Oracle**, el interruptor **«Ante errores de fila, omitir y continuar»** está activado de manera predeterminada en el entorno controlado de desarrollo. La política es:
+
+- **Prioridad 1:** localizar un registro Oracle existente por ID o por una clave `unique:true` del modelo `entity.json`; si hay un único ID confirmado, hacer PATCH y registrar la equivalencia para los hijos.
+- **Prioridad 2:** si un registro recibe un error recuperable específico de fila (`HTTP 400`, `404`, `409`, `422`, o coincidencia ambigua), **omitir solo esa fila**. Registrar objeto, ID, campo único, valor del campo no secreto, tipo/código de Oracle y explicación en `skippedRecords` del reporte JSON.
+- **Protección de relaciones:** cada fila hija se valida inmediatamente antes del envío. Si depende de un ID padre omitido, también se omite; **no se publican FK apuntando a un ID de origen posiblemente incorrecto**. Los objetos y registros independientes continúan según el plan de etapas.
+- **Errores críticos:** permisos `401/403`, fallos `5xx`, red, respuestas ambiguas después de escritura o incompatibilidades no recuperables siguen **deteniendo** la carga, pues omitirlos puede ocultar corrupción o escrituras parciales.
+- La finalización con omisiones indica `completed-with-omissions` (no éxito completo). Descarga la auditoría con `skippedRecords` e `idMappings` antes de repetir la carga.
+
+Desactiva el interruptor si deseas el comportamiento estricto de detener ante la primera fila conflictiva. Esta opción no elimina ni altera datos existentes y no ejecuta `rollback`.
