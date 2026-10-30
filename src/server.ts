@@ -110,6 +110,14 @@ async function oracle(req:IncomingMessage,res:ServerResponse,url:URL):Promise<vo
       const v=url.searchParams.get(key);
       if(v!==null){if(!/^\d+$/.test(v)||Number(v)>10000)return json(res,400,{error:'Parámetro de paginación inválido.'});upstream.searchParams.set(key,v);}
     }
+    // Only constrained equality filters are exposed to the local publisher.
+    // This is for exact unique-key reconciliation; reject general user-supplied queries.
+    const q=url.searchParams.get('q');
+    if(q!==null){
+      if(match[2]||q.length>512||!/^[A-Za-z][A-Za-z0-9_]*\s*=\s*(?:'(?:[^']|'')*'|[+-]?\d+(?:\.\d+)?)$/.test(q))
+        return json(res,400,{error:'Filtro de clave única inválido.'});
+      upstream.searchParams.set('q',q);
+    }
   }
   const headers:Record<string,string>={Accept:'application/json',Authorization:AUTH_MODE==='public'?'Public':'Bearer '+TOKEN};
   if(body!==undefined)headers['Content-Type']='application/json';
