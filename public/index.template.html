@@ -715,6 +715,12 @@ async function pubResumeFromJson(raw){
   ', fila '+(cursor.rowIndex+1)+'. Confirma GET y autoriza una vez para continuar.','ok');
  return restored;
 }
+function pubStageEnd(start,total,stepMode,autoStartNext){
+ // Every BO remains sequential and its relationships are validated before
+ // writing. Auto mode only removes the extra human acknowledgement between
+ // stages; the initial explicit write confirmation remains mandatory.
+ return autoStartNext||!stepMode?total:Math.min(start+1,total);
+}
 async function pubSend(){
  if(PUB.busy)return;
  pubFromInputs();
@@ -767,7 +773,7 @@ async function pubSend(){
      if(PUB.restoredMappings){session.idMap.load(PUB.restoredMappings);report.restoredMappings=PUB.restoredCount;}
      PUB.stageSession=session;PUB.results=report;
    }
-   let start=session.nextStage,end=(PUB.autoStartNext||!PUB.stepMode)?plan.stages.length:Math.min(start+1,plan.stages.length);
+   let start=session.nextStage,end=pubStageEnd(start,plan.stages.length,PUB.stepMode,PUB.autoStartNext);
    if(!window.confirm(`ENVÍO REAL A ORACLE DESARROLLO\nEtapa(s): ${start+1} a ${end} de ${plan.stages.length}\nTablas: ${plan.stages.slice(start,end).flat().join(', ')}\nModo: ${PUB.mode}\nRegistros por objeto: ${PUB.limit}${session.report.configurationReview&&plan.stages.slice(start,end).some(s=>s.includes('Configuration'))?'\nConfiguration: '+session.report.configurationReview.total+' registros, '+session.report.configurationReview.flaggedCount+' parámetros de ambiente (se incluyen tal cual)':''}\n\n¿Confirmas continuar con este tramo?`))return;
    if(session.failed){
      session.failed=false;
