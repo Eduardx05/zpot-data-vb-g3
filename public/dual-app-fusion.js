@@ -225,11 +225,12 @@
   };
  }
  function renderPage(){if(section==='fusionar')render();}
- async function zipBlob(){
-  const merged=F.preview;if(!merged||F.signature!==signature())throw Error('Analiza los dos ZIP antes de exportar.');
-  const zip=new JSZip(),names=Object.keys(merged.tables).sort();
+ async function zipBlob(mode='full'){
+  const source=mode==='delta'?F.delta:F.preview;
+  if(!source||F.signature!==signature())throw Error('Analiza los dos ZIP antes de exportar.');
+  const zip=new JSZip(),names=Object.keys(source.tables).sort();
   for(let i=0;i<names.length;i++){
-   const t=names[i],data=merged.tables[t];
+   const t=names[i],data=source.tables[t];
    zip.file(t+'.csv',makeCSV(data.columns,data.rows));
    if(i%12===0){status('Generando CSV '+(i+1)+'/'+names.length);await new Promise(r=>setTimeout(r,0));}
   }
@@ -237,39 +238,45 @@
    status('Comprimiendo ZIP: '+Math.round(meta.percent)+'%');
   });
  }
- function fileName(){
+ function fileName(mode='full'){
   const date=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
   const oldSha=String(D[F.oldIndex]?.sha||'').slice(0,6),newSha=String(D[F.newIndex]?.sha||'').slice(0,6);
-  return (F.preview?.totals.blocking?'BNCR_FUSION_REVISAR_NO_PUBLICAR_':'BNCR_FUSION_CONSOLIDADA_')+date+'_'+oldSha+'_'+newSha+'.zip';
+  const stem=mode==='delta'?'BNCR_DIFERENCIAL_SOLO_CAMBIOS_':'BNCR_FUSION_COMPLETA_';
+  return (F.preview?.totals.blocking?'BNCR_REVISAR_NO_PUBLICAR_':'')+stem+date+'_'+oldSha+'_'+newSha+'.zip';
  }
- async function exportZip(){
+ async function exportZip(mode='full'){
   if(F.busy||!F.preview)return;
   F.busy=true;
   try{
-   const blob=await zipBlob();
-   download(fileName(),blob);
-   status('ZIP descargado ('+fmt(F.preview.totals.result)+' filas). '+(F.preview.totals.blocking?'Es solo para revisión: existen bloqueos.':'Descarga también la auditoría JSON.'));
+   const blob=await zipBlob(mode);
+   download(fileName(mode),blob);
+   const total=mode==='delta'?F.delta.totals.totalWrites:F.preview.totals.result;
+   status('ZIP '+(mode==='delta'?'diferencial':'consolidado')+' descargado ('+fmt(total)+
+    ' filas). '+(F.preview.totals.blocking?'Es solo para revisión: existen conflictos.':'Guarda también la auditoría JSON.'));
   }catch(e){status(e.message,true);}
   finally{F.busy=false;}
  }
  async function preparePublication(){
   if(F.busy||!F.preview)return;
   if(F.destination!=='oracle')return status('Selecciona el destino Oracle.',true);
-  if(F.preview.totals.blocking)throw Error('Hay '+F.preview.totals.blocking+' incidencias bloqueantes. Descarga la auditoría; no se preparará una carga potencialmente inconsistente.');
-  if(!window.confirm('Se preparará el ZIP fusionado en el publicador actual, SOLO para OIC Desarrollo. No se enviará ningún registro todavía. Deberás verificar GET, revisar el mapa y autorizar la publicación explícitamente. ¿Continuar?'))return;
+  if(!F.baselineConfirmed)return status('Confirma que el ZIP A representa los datos actuales de Oracle antes de continuar.',true);
+  if(F.preview.totals.blocking)return status('Hay '+F.preview.totals.blocking+' incidencias bloqueantes. Resuélvelas antes de preparar la carga.',true);
+  if(!F.delta?.totals.totalWrites)return status('No hay datos nuevos ni cambios para publicar.',true);
+  if(!window.confirm('Preparar SOLO el ZIP diferencial para OIC Desarrollo. Los registros del ZIP A que no cambiaron NO serán enviados. No se escribirá nada todavía. El publicador solicitará GET y confirmación. ¿Continuar?'))return;
   F.busy=true;
   try{
-   const blob=await zipBlob();
-   const file=new File([blob],fileName(),{type:'application/zip'});
+   const blob=await zipBlob('delta');
+   const file=new File([blob],fileName('delta'),{type:'application/zip'});
    await addFiles([file]);
    const source=D.findIndex(d=>d.filename===file.name);
-   if(source<0)throw Error('No se registró el ZIP consolidado.');
+   if(source<0)throw Error('No se registró el ZIP diferencial.');
    consolidation=new Set([source]);conSchema=source;active=source;schemaMode='reference';includeMode='all';
-   PUB.tableSet=new Set(Object.keys(F.preview.tables));PUB.mode='sync';PUB.preserveIds=true;
+   PUB.tableSet=new Set(Object.keys(F.delta.tables));PUB.mode='sync';PUB.preserveIds=true;
    PUB.approved=false;PUB.testPassed=false;PUB.stageSession=null;
    F.busy=false;go('publicar');
-   setMsg('ZIP fusionado preparado. Comprueba el destino con GET y revisa todos los registros antes de habilitar la escritura.','warn');
-  }catch(e){status('No se pudo preparar el publicador: '+e.message,true);F.busy=false;}
+   setMsg('Solo ZIP diferencial preparado: '+F.delta.totals.inserts+' inserciones y '+F.delta.totals.updates+
+    ' actualizaciones; los datos sin cambios de ZIP A no se enviarán. Comprueba GET y autoriza cuando corresponda.','warn');
+  }catch(e){status('No se pudo preparar la publicación: '+e.message,true);F.busy=false;}
  }
  document.addEventListener('change',e=>{
   const x=e.target;if(!x.closest('#main')||section!=='fusionar')return;
