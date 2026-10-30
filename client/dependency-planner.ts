@@ -57,6 +57,39 @@ function dependencyPlan(selected:readonly string[],outgoing:Record<string,readon
 (globalThis as typeof globalThis & {ZPOTDependencyPlanner?:typeof dependencyPlan}).ZPOTDependencyPlanner=dependencyPlan;
 
 /**
+ * CSV-only Data Manager ZIPs do not contain entity.json relationship metadata.
+ * Infer ONLY when the column name is an exact, case-insensitive BO name match.
+ * This is deliberately conservative: no fuzzy matches and no fabricated FKs.
+ */
+function inferRelationshipsFromFields(
+ child:string,
+ fields:readonly (string|{name:string;type?:string})[],
+ availableObjects:readonly string[]
+):ZpotRelation[]{
+ const targets=new Map<string,string>();
+ for(const name of availableObjects){
+  if(name!==child&&/^[A-Za-z][A-Za-z0-9_]*$/.test(name)){
+   const key=name.toLowerCase();
+   if(!targets.has(key))targets.set(key,name);
+  }
+ }
+ const result:ZpotRelation[]=[],seen=new Set<string>();
+ for(const item of fields){
+  const field=typeof item==='string'?item:item?.name;
+  if(!field||seen.has(field.toLowerCase()))continue;
+  const target=targets.get(field.toLowerCase());
+  if(!target)continue;
+  result.push({field,target,name:'Inferida por nombre exacto de columna ID (revisar esquema)'});
+  seen.add(field.toLowerCase());
+ }
+ return result;
+}
+(globalThis as typeof globalThis & {
+ ZPOTDependencyInference?:typeof inferRelationshipsFromFields
+}).ZPOTDependencyInference=inferRelationshipsFromFields;
+
+
+/**
  * Completing a publication selection is purely local: available parents are
  * included recursively, while missing parents remain external references
  * to be checked against Oracle by the publisher before writing.
