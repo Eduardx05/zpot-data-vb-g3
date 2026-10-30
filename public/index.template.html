@@ -291,9 +291,13 @@ async function pubCheckReferences(pack, session, base) {
    const parent=rel.target,reference=parent+'/'+value;
    if(required.has(reference))continue;
    required.set(reference,{parent,id:value,field:rel.field});
-   if(parent===pack.table&&currentIds.has(value)&&!done.get(parent)?.has(value)){
-     // A self-referential parent may appear after its child; do not guess an order.
-     throw Error(`Autorreferencia ${pack.table}.${rel.field}=${value}: el registro padre aún no fue confirmado. Sepáralo en otra etapa o cárgalo primero.`);
+   if(parent===pack.table&&currentIds.has(value)){
+     // Rows were topologically ordered before this stage. The parent will be
+     // inserted first in the same BO, so do not GET it before the stage starts.
+     const parentIndex=pack.rows.findIndex(x=>String(x.id??'').trim()===value);
+     const childIndex=pack.rows.indexOf(row);
+     if(parentIndex>=childIndex)throw Error('Dependencia interna no ordenada: '+pack.table+' ID '+value+' debe cargarse antes del hijo.');
+     continue;
    }
    if(done.get(parent)?.has(value))continue;
    const planned=session.packs.get(parent);
@@ -371,18 +375,47 @@ async function pubSend(){
          const id=r.id;
          if(PUB.mode!=='create'&&!id){tab.skipped++;report.skipped++;stageReport.skipped++;pubLog('Omitido '+t+': fila sin ID');continue;}
          try{
-           const payload=pubPayload(t,r,pack.cols),route=PUB.mode==='update'?pubEndpoint(base,t,id):pubEndpoint(base,t);
-           const opts={method:PUB.mode==='update'?'PATCH':'POST',headers:{Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(payload)};
-           if(PUB.mode==='upsert')opts.headers['Upsert-Mode']='true';
-           const result=await pubFetch(route,opts);
-           if(PUB.preserveIds&&id!=null&&id!==''&&result.json?.id!==undefined&&String(result.json.id)!==String(id)){
-             throw Error(`Oracle devolvió id ${result.json.id} en lugar de ${id}; se detiene para evitar perder relaciones.`);
+           const sourceId=String(id??'').trim();
+           const sourcePayload=pubPayload(t,r,pack.cols);
+           const mapped=session.idMap.rewrite(sourcePayload,pubRelationships([t])[t]||[]);
+           const payload=mapped.row;
+           let result,operation;
+           const headers={Accept:'application/json','Content-Type':'application/json'};
+           const body=JSON.stringify(payload);
+           if(PUB.mode==='sync'){
+             const sync=await window.ZPOTOracleRecordSync(sourceId,{
+               read:key=>pubFetch(pubEndpoint(base,t,key),{headers:{Accept:'application/json'}}),
+               create:()=>pubFetch(pubEndpoint(base,t),{method:'POST',headers,body}),
+               update:key=>pubFetch(pubEndpoint(base,t,key),{method:'PATCH',headers,body})
+             });
+             result=sync.result;operation=sync.operation;
+           }else{
+             const route=PUB.mode==='update'?pubEndpoint(base,t,id):pubEndpoint(base,t);
+             const opts={method:PUB.mode==='update'?'PATCH':'POST',headers,body};
+             if(PUB.mode==='upsert')opts.headers['Upsert-Mode']='true';
+             result=await pubFetch(route,opts);
+             operation=PUB.mode==='update'?'updated':'created';
            }
+           let oracleId=result.json?.id;
+           if((oracleId===undefined||oracleId===null||oracleId==='')&&operation==='updated')oracleId=sourceId;
+           if((oracleId===undefined||oracleId===null||oracleId==='')&&sourceId){
+             // Some Oracle responses omit id. Verify that the original id is
+             // actually addressable before assuming it was preserved.
+             try {await pubFetch(pubEndpoint(base,t,sourceId),{headers:{Accept:'application/json'}});oracleId=sourceId;}
+             catch(e){throw Error('Oracle aceptó la solicitud pero no devolvió ID. No se puede asociar automáticamente '+t+' ID '+sourceId+'. Verifica el registro antes de reintentar. '+e.message);}
+           }
+           if(sourceId&&oracleId!==undefined&&oracleId!==null&&oracleId!=='')session.idMap.put(t,sourceId,oracleId);
+           if(operation==='updated'){tab.updated++;report.updated++;stageReport.updated++;}
+           else {tab.created++;report.created++;stageReport.created++;}
            tab.succeeded++;report.success++;stageReport.success++;
-           if(id!==undefined&&id!==null&&id!==''){
+           if(sourceId){
              if(!session.successfulIds.has(t))session.successfulIds.set(t,new Set());
-             session.successfulIds.get(t).add(String(id));
+             session.successfulIds.get(t).add(sourceId);
            }
+           if(report.operations.length<10000)report.operations.push({stage:stageIndex+1,object:t,originalId:sourceId,oracleId:String(oracleId??''),operation,remappedForeignKeys:mapped.replacements});
+           else report.operationsTruncated=true;
+           pubLog('✓ '+t+' ID '+sourceId+' → Oracle '+String(oracleId??'sin ID')+' · '+(operation==='updated'?'actualizado':'creado')+(mapped.replacements.length?' · '+mapped.replacements.length+' relación(es) reasociadas':''));
+
          }catch(e){
            tab.failed++;report.failed++;stageReport.failed++;session.failed=true;
            if(report.errors.length<250)report.errors.push({stage:stageIndex+1,object:t,id:String(id??'SIN_ID'),message:e.message});
