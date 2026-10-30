@@ -15,7 +15,7 @@ type ZpotSyncTransport={
 async function syncOracleRecordById(
  sourceId:unknown,
  transport:ZpotSyncTransport,
- options:{mappedTargetId?:unknown}={}
+ options:{mappedTargetId?:unknown;findUnique?:()=>Promise<{id:string;field:string}|null>;onTarget?:(targetId:string)=>void}={}
 ):Promise<ZpotSyncResult>{
  const valid=(value:unknown):string=>{
   const key=String(value??'').trim();
@@ -24,7 +24,15 @@ async function syncOracleRecordById(
  };
  const source=valid(sourceId);
  const mapped=options.mappedTargetId===undefined?undefined:valid(options.mappedTargetId);
- const target=mapped||source;
+ // A declared unique field may already exist under a different Oracle ID.
+ // A strong exact match is preferred over a source-ID collision; it is not
+ // a fuzzy name-based association.
+ const unique=options.findUnique?await options.findUnique():null;
+ const uniqueId=unique?valid(unique.id):undefined;
+ if(mapped&&uniqueId&&mapped!==uniqueId)
+  throw Error('Conflicto de identidad: el ID Oracle guardado ('+mapped+') difiere del encontrado por clave única ('+uniqueId+').');
+ const target=uniqueId||mapped||source;
+ options.onTarget?.(target);
  try{
   const response=await transport.read(target);
   const remoteId=(response.json as {id?:unknown}|null)?.id;
@@ -32,10 +40,24 @@ async function syncOracleRecordById(
    throw Error('El registro consultado no coincide con el ID de Oracle solicitado: '+target);
  }catch(error){
   if((error as {status?:number})?.status!==404)throw error;
-  if(mapped!==undefined)
-   throw Error('El ID Oracle '+target+' previamente asociado al origen '+source+' ya no existe. No se creará otro registro automáticamente.');
-  const result=await transport.create();
-  return {operation:'created',targetId:source,result};
+  if(mapped!==undefined||uniqueId!==undefined)
+   throw Error('El ID Oracle '+target+' confirmado previamente ya no existe. No se creará otro registro automáticamente.');
+  try{
+   const result=await transport.create();
+   return {operation:'created',targetId:source,result};
+  }catch(createError){
+   // A concurrent insertion can win between GET and POST. Reconcile a known
+   // uniqueness violation once; never treat arbitrary HTTP 400 as duplicate.
+   const err=createError as {status?:number;oracleType?:string};
+   if(err.status!==400||!/uniquenessViolation/i.test(String(err.oracleType||''))||!options.findUnique)throw createError;
+   const now=await options.findUnique();
+   if(!now)throw createError;
+   const resolved=valid(now.id);
+   options.onTarget?.(resolved);
+   await transport.read(resolved);
+   const result=await transport.update(resolved);
+   return {operation:'updated',targetId:resolved,result};
+  }
  }
  const result=await transport.update(target);
  return {operation:'updated',targetId:target,result};
