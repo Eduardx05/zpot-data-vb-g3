@@ -173,7 +173,7 @@ test('HTTP 400 unrelated to declared uniqueness is never reconciled',async()=>{
   read:async()=>{throw Object.assign(Error('not found'),{status:404});},
   create:async()=>{throw error;},
   update:async()=>{calls++;return {status:200};}
- },{findUnique:async()=>{calls++;return {id:'5',field:'absenceName'};}}),/invalid value/);
+ },{findUnique:async()=>{calls++;return null;}}),/invalid value/);
  assert.equal(calls,1); // precheck only; no retry or PATCH
 });
 
