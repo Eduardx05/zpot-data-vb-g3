@@ -97,6 +97,8 @@
        <button class="btn btn-primary" id="fusion-batch-start" ${!F.baselineConfirmed||m.blocking||!F.batchChecked||!F.delta?.totals.totalWrites||F.batchBusy||F.batchReport?.status==='completed'?'disabled':''}>Enviar ${fmt(d.totalWrites)} cambios mediante API batch</button>
        <button class="btn" id="fusion-batch-stop" ${!F.batchBusy?'disabled':''}>Detener después de los lotes en curso</button>
        <button class="btn" id="fusion-batch-report" ${!F.batchReport?'disabled':''}>Descargar JSON de lotes y equivalencias</button>
+       <button class="btn" id="fusion-batch-import" ${F.batchBusy?'disabled':''}>Continuar desde JSON batch</button>
+       <input type="file" id="fusion-batch-file" accept=".json,application/json" hidden/>
       </div>
       <div id="fusion-batch-progress" class="notice">${F.batchReport?'Confirmados: '+fmt(F.batchReport.confirmed)+' / '+fmt(d.totalWrites)+'. Estado: '+safe(F.batchReport.status):'No hay lotes enviados todavía.'}</div>
       <p class="footnote">Si Oracle devuelve timeout, HTTP 5xx o una respuesta batch incompleta, se detendrá sin reintentar automáticamente. Conserva el JSON para verificar los IDs confirmados.</p>
