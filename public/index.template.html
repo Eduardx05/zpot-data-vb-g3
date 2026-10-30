@@ -453,7 +453,10 @@ function pubCanSkipIssue(error){
  if(error?.skipRecord===true)return true;
  // Oracle's row-level validation, uniqueness and missing-record failures can
  // be omitted; authentication, server faults and ambiguous writes stop the job.
- return [400,404,409,422].includes(error?.status);
+ if([400,404,409,422].includes(error?.status))return true;
+ // Exact unique-key reconciliation may produce a local row-specific conflict
+ // without an HTTP status; never silently continue for runtime/network faults.
+ return /^(?:Hay varias coincidencias|La clave única|Colisión de IDs|Conflicto de identidad|Oracle rechazó la clave única|Varias filas de Oracle coinciden|Las claves únicas.*distintos IDs|No se ha revisado la colección completa|No se pudo revisar completamente)/i.test(String(error?.message||''));
 }
 async function pubSend(){
  if(PUB.busy)return;
@@ -620,12 +623,12 @@ async function pubSend(){
              if(report.skippedRecords.length<10000)report.skippedRecords.push(issue);
              else report.skippedTruncated=true;
              pubLog('⚠ Omitido '+t+' origen ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+(issue.field?'campo '+issue.field+(issue.fieldValue?'='+issue.fieldValue:'')+' | ':'')+issue.message+'. Dependientes con ese ID también serán omitidos.');
-             continue;
+           }else{
+             tab.failed++;report.failed++;stageReport.failed++;session.failed=true;
+             if(report.errors.length<250)report.errors.push(issue);
+             pubLog('✖ Error crítico '+t+' ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+issue.message);
+             throw Error('Fallo crítico en '+t+' (ID '+issue.id+'); se detuvo la carga para evitar corrupción de datos. '+issue.message);
            }
-           tab.failed++;report.failed++;stageReport.failed++;session.failed=true;
-           if(report.errors.length<250)report.errors.push(issue);
-           pubLog('✖ Error crítico '+t+' ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+issue.message);
-           throw Error('Fallo crítico en '+t+' (ID '+issue.id+'); se detuvo la carga para evitar corrupción de datos. '+issue.message);
          }
          const processed=report.success+report.failed+report.skipped;
          const bar=$('pub-progress');if(bar)bar.style.width=(100*processed/Math.max(1,report.total)).toFixed(1)+'%';
