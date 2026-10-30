@@ -140,3 +140,12 @@ Cuando Oracle crea un registro y devuelve otro ID, ZPOT guarda la equivalencia `
 **PATCH no inserta filas inexistentes.** Si Oracle no devuelve el ID del registro creado ni en la respuesta ni en la cabecera Location, ZPOT intenta comprobar el ID original mediante GET y, si no puede identificar el registro, detiene la carga para evitar relaciones incorrectas. No reintentes a ciegas una creación que devolvió una respuesta ambigua.
 
 En el ambiente controlado de OIC Desarrollo se permite migrar también `Configuration`, pero sus parámetros de URL/seguridad se señalan como advertencia en el reporte y se incluyen sin modificarlos.
+
+
+### Conflicto de unicidad al migrar IDs de catálogos
+
+Si `GET /AbsenceTypeCatalogue/1` devuelve `404`, pero Oracle ya contiene el mismo `absenceName` con otro ID, **POST puede responder `400 uniquenessViolation`**. ZPOT ahora consulta primero las claves `unique:true` declaradas en el `entity.json` original: realiza una búsqueda exacta del campo, identifica un único ID Oracle, actualiza mediante **PATCH** y guarda el vínculo `ID origen → ID Oracle` para las referencias de los hijos. Ejemplo: `AbsenceTypeCatalogue.id=1` → `Oracle.id=7` por `absenceName`; los valores FK de `AbsenceCatalogue` se remapean al ID `7` dentro de esa sesión.
+
+Si Oracle no admite filtros `q`, el publicador realiza una lectura paginada de respaldo con un límite conservador. Si hay coincidencias ambiguas, datos incompletos, errores de lectura o colisiones con IDs ya asociados a otra fila de origen, **no realiza PATCH ni POST automáticos**. Los errores originales se conservan para revisión. No se hacen coincidencias aproximadas ni por nombres de campos no declarados únicos.
+
+Selecciona **Por ID: PATCH existente / POST nuevo (solo 404)** en el desplegable; los modos heredados `POST` y `Upsert-Mode` no ejecutan esta reconciliación de unicidad. Reinicia Node y fuerza una recarga del navegador tras actualizar el proyecto.
