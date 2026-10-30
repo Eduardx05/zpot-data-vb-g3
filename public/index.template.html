@@ -373,7 +373,7 @@ async function pubFetch(url,options={}){
  const ct=res.headers.get('content-type')||'',body=await res.text();
  if(/<html|<!doctype/i.test(body.slice(0,400)) && !ct.includes('json'))throw Error('El proxy devolvió HTML en lugar de JSON.');
  let parsed=null;try{parsed=JSON.parse(body)}catch{}
- if(!res.ok){const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;err.oracleType=String(parsed?.type||'');throw err;}
+ if(!res.ok){const detail=parsed?.['o:errorDetails']?.find(x=>typeof x?.detail==='string')?.detail;const err=new Error('HTTP '+res.status+': '+String(parsed?.error||parsed?.detail||detail||parsed?.message||body.slice(0,250)||res.statusText).slice(0,350));err.status=res.status;err.oracleType=String(parsed?.type||'');throw err;}
  return {json:parsed,status:res.status,headers:res.headers};
 }
 async function pubTest(){pubFromInputs();let btn=$('pub-test'),out=$('pub-test-result');try{
@@ -540,7 +540,10 @@ async function pubSend(){
                read:key=>pubFetch(pubEndpoint(base,t,key),{headers:{Accept:'application/json'}}),
                create:()=>pubFetch(pubEndpoint(base,t),{method:'POST',headers,body:postBody}),
                update:key=>pubFetch(pubEndpoint(base,t,key),{method:'PATCH',headers,body:patchBody})
-             },{mappedTargetId:session.idMap.get(t,sourceId),findUnique});
+             },{mappedTargetId:session.idMap.get(t,sourceId),findUnique,onTarget:target=>{
+               const owner=session.idMap.ownerOf(t,target);
+               if(owner&&owner!==sourceId)throw Error('Colisión de IDs: Oracle '+t+' ID '+target+' ya corresponde al ID origen '+owner+'. Se cancela PATCH.');
+             }});
              result=sync.result;operation=sync.operation;targetId=sync.targetId;
              if(matchedUnique&&matchedUnique.id===String(targetId)){
                pubLog('↳ '+t+' origen '+sourceId+' asociado por '+matchedUnique.field+' a Oracle ID '+targetId+' (PATCH).');
