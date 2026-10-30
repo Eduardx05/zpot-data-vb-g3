@@ -15,7 +15,7 @@ type ZpotSyncTransport={
 async function syncOracleRecordById(
  sourceId:unknown,
  transport:ZpotSyncTransport,
- options:{mappedTargetId?:unknown;findUnique?:()=>Promise<{id:string;field:string}|null>;onTarget?:(targetId:string)=>void}={}
+ options:{mappedTargetId?:unknown;findUnique?:(conflictingField?:string)=>Promise<{id:string;field:string}|null>;onTarget?:(targetId:string)=>void}={}
 ):Promise<ZpotSyncResult>{
  const valid=(value:unknown):string=>{
   const key=String(value??'').trim();
@@ -48,10 +48,15 @@ async function syncOracleRecordById(
   }catch(createError){
    // A concurrent insertion can win between GET and POST. Reconcile a known
    // uniqueness violation once; never treat arbitrary HTTP 400 as duplicate.
-   const err=createError as {status?:number;oracleType?:string};
+   const err=createError as {status?:number;oracleType?:string;oracleDetail?:string;message?:string};
    if(err.status!==400||!/uniquenessViolation/i.test(String(err.oracleType||''))||!options.findUnique)throw createError;
-   const now=await options.findUnique();
-   if(!now)throw createError;
+   const detail=String(err.oracleDetail||err.message||'');
+   const uniqueField=/Non-unique values found for\s+([A-Za-z][A-Za-z0-9_]*)/i.exec(detail)?.[1];
+   // Reconcile only the exact constraint that Oracle reports, not a guessed
+   // value or another unique field from the same Business Object.
+   if(!uniqueField)throw createError;
+   const now=await options.findUnique(uniqueField);
+   if(!now||now.field!==uniqueField)throw createError;
    const resolved=valid(now.id);
    options.onTarget?.(resolved);
    await transport.read(resolved);
