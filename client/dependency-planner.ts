@@ -44,3 +44,62 @@ function dependencyPlan(selected:readonly string[],outgoing:Record<string,readon
  return {stages,edges,external,selfReferences,cycles,unplanned,order:stages.flat()};
 }
 (globalThis as typeof globalThis & {ZPOTDependencyPlanner?:typeof dependencyPlan}).ZPOTDependencyPlanner=dependencyPlan;
+
+/**
+ * Completing a publication selection is purely local: available parents are
+ * included recursively, while missing parents remain external references
+ * to be checked against Oracle by the publisher before writing.
+ */
+type ZpotExpandedSelection={selected:string[];added:string[];missing:string[]};
+function selectRequiredParents(
+ selected:readonly string[],
+ available:readonly string[],
+ outgoing:Record<string,readonly ZpotRelation[]>
+):ZpotExpandedSelection{
+ const permitted=new Set(available);
+ const chosen=new Set(selected.filter(name=>permitted.has(name)));
+ const initial=new Set(chosen);
+ const visited=new Set<string>(),missing=new Set<string>();
+ const visit=(child:string):void=>{
+  if(visited.has(child))return;
+  visited.add(child);
+  for(const rel of outgoing[child]||[]){
+   const parent=rel?.target;
+   if(!parent||parent===child||!/^[A-Za-z][A-Za-z0-9_]*$/.test(parent))continue;
+   if(!permitted.has(parent)){missing.add(child+' → '+parent);continue;}
+   chosen.add(parent);
+   visit(parent);
+  }
+ };
+ for(const name of [...chosen])visit(name);
+ return {
+  selected:[...chosen].sort(),
+  added:[...chosen].filter(name=>!initial.has(name)).sort(),
+  missing:[...missing].sort()
+ };
+}
+/** Unchecking a parent also unchecks every selected dependent (transitively). */
+function deselectWithDependents(
+ selected:readonly string[],
+ parent:string,
+ outgoing:Record<string,readonly ZpotRelation[]>
+):{selected:string[];removed:string[]}{
+ const chosen=new Set(selected);
+ const removed=new Set<string>();
+ const queue=[parent];
+ for(let i=0;i<queue.length;i++){
+  const current=queue[i];
+  if(!chosen.has(current)||removed.has(current))continue;
+  removed.add(current);
+  for(const child of chosen){
+   if(removed.has(child))continue;
+   if((outgoing[child]||[]).some(rel=>rel?.target===current))queue.push(child);
+  }
+ }
+ for(const name of removed)chosen.delete(name);
+ return {selected:[...chosen].sort(),removed:[...removed].sort()};
+}
+(globalThis as typeof globalThis & {
+ ZPOTDependencySelection?:{withParents:typeof selectRequiredParents;withoutParent:typeof deselectWithDependents}
+}).ZPOTDependencySelection={withParents:selectRequiredParents,withoutParent:deselectWithDependents};
+
