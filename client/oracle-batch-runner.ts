@@ -18,6 +18,7 @@ type BatchExecutorOptions={
  concurrency:number;
  normalize:(table:string,row:BatchRecord,columns:string[])=>Record<string,unknown>;
  send:(parts:Array<{id:string;path:string;operation:'create'|'update';payload:Record<string,unknown>}>)=>Promise<OracleBatchReply>;
+ resume?:{completed:Record<string,string[]>;mappings:Record<string,Record<string,string>>};
  onCommit?:(batch:BatchCommitted)=>void;
  shouldStop?:()=>boolean;
 };
@@ -33,6 +34,8 @@ async function executeOracleBatches(options:BatchExecutorOptions){
   if(!set.has(change.object))throw Error('Un BO del diferencial no aparece en el plan: '+change.object);
   if(!/^[A-Za-z][A-Za-z0-9_]*$/.test(change.object)||!/^[A-Za-z0-9._~-]+$/.test(change.id))
    throw Error('BO o ID inválido en el diferencial.');
+  const done=options.resume?.completed?.[change.object]||[];
+  if(done.includes(change.id))continue;
   const rows=group.get(change.object)||[];
   rows.push(change);group.set(change.object,rows);
  }
@@ -56,6 +59,8 @@ async function executeOracleBatches(options:BatchExecutorOptions){
   }
  }
  const mapping=new Map<string,Map<string,string>>();
+ for(const [name,rows] of Object.entries(options.resume?.mappings||{}))
+  mapping.set(name,new Map(Object.entries(rows)));
  const committed:BatchCommitted[]=[];
  let confirmed=0;
  const mapId=(table:string,sourceId:string)=>mapping.get(table)?.get(sourceId)||sourceId;
