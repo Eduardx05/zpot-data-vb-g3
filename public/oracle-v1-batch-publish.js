@@ -42,8 +42,18 @@
    '<div class="actions"><button class="btn" id="v1batch-import" '+(B.busy?'disabled':'')+'>Importar auditoría batch pausada</button><input type="file" id="v1batch-file" accept=".json,application/json" hidden/><button class="btn" id="v1batch-export" '+(B.audit?'':'disabled')+'>Descargar auditoría batch</button></div>'+
    '<div id="v1batch-status" class="notice">'+(B.audit?'Confirmados: '+fmt(B.audit.confirmed)+' / '+fmt(B.audit.total)+'; etapa siguiente '+(B.audit.nextStage+1)+'; estado '+esc(B.audit.status):'Sin operaciones batch enviadas.')+'</div>');
   html=html.replace('<section class="panel">',controls+'<section class="panel">');
-  if(!B.audit)html=html.replace(/(<button[^>]*id="pub-report")[^>]*>/,'$1 disabled>');
-  if(B.audit)html=html.replace(/(<button[^>]*id="pub-save-checkpoint")[^>]*>/,'$1>');
+  for(const [id,disabled] of [
+   ['pub-report',!B.audit],['pub-save-checkpoint',!B.audit],
+   ['pub-send',B.busy||B.audit?.status==='completed'||B.audit?.status==='needs-reconciliation']
+  ]){
+   const pattern=new RegExp('(<button[^>]*id="'+id+'")[^>]*>');
+   html=html.replace(pattern,'$1'+(disabled?' disabled':'')+'>');
+  }
+  if(B.audit){
+   html=html.replace('id="pub-progress" class="progress-fill" style="width:0%"',
+    'id="pub-progress" class="progress-fill" style="width:'+
+      (100*(B.audit.confirmed+B.audit.skipped)/Math.max(1,B.audit.total)).toFixed(1)+'%"');
+  }
   return html;
  }
  async function buildSession(audit){
@@ -62,6 +72,16 @@
    if(JSON.stringify(audit.rowCounts)!==JSON.stringify(rowCounts)||
       JSON.stringify(audit.plan)!==JSON.stringify(plan.stages))
     throw Error('El esquema, los conteos o el plan difieren de la auditoría batch.');
+   for(const [table,ids] of Object.entries(audit.completed||{})){
+    const present=new Set(packs.get(table)?.rows.map(row=>String(row.id))||[]);
+    if(!packs.has(table)||ids.some(id=>!present.has(id)))
+     throw Error('La auditoría contiene IDs confirmados ajenos al ZIP de '+table);
+   }
+   for(const issue of audit.skippedRecords||[]){
+    const present=new Set(packs.get(issue.object)?.rows.map(row=>String(row.id))||[]);
+    if(!packs.has(issue.object)||!present.has(String(issue.id)))
+     throw Error('La auditoría contiene omisiones ajenas a los ZIP: '+issue.object);
+   }
   }
   const idMap=window.ZPOTOracleIdTools.createRegistry();
   if(PUB.restoredMappings)idMap.load(PUB.restoredMappings);
@@ -306,7 +326,13 @@
   if(B.busy||PUB.busy||B.audit)throw Error('Restablece la sesión actual antes de cargar una auditoría.');
   if(file.size>75*1024*1024)throw Error('Archivo demasiado grande.');
   const raw=validateAudit(JSON.parse(await file.text()));
-  const built=await buildSession(raw);
+  // Solo confiar en los ID Oracle demostrados por lotes confirmados y
+  // equivalencias V1 importadas aparte. Ignorar mapas provisionales del JSON.
+  const trusted={};
+  for(const batch of raw.batches)
+   for(const op of batch.operations)(trusted[batch.table]??={})[op.sourceId]=op.oracleId;
+  const built=await buildSession({...raw,idMappings:trusted});
+  raw.idMappings=built.session.idMap.snapshot();
   B.audit=raw;B.session=built.session;PUB.testPassed=false;PUB.approved=false;
   render();
   show('Auditoría recuperada: '+raw.confirmed+' confirmados; verifica GET y autoriza la continuación.');
