@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 const source=readFileSync('dist/public/dependency-planner.js','utf8');
 const plan=(names,relations)=>{const ctx={};runInNewContext(source,ctx);return ctx.ZPOTDependencyPlanner(names,relations)};
+const selection=()=>{const ctx={};runInNewContext(source,ctx);return ctx.ZPOTDependencySelection};
 test('AbsenceCatalogue after both parent catalogs',()=>{
  const p=plan(['AbsenceCatalogue','AbsenceTypeCatalogue','AbsenceLapseCatalogue'],{
  AbsenceCatalogue:[{field:'absenceTypeCatalogue',target:'AbsenceTypeCatalogue'},{field:'absenceLapseCatalogue',target:'AbsenceLapseCatalogue'}]});
@@ -31,4 +32,46 @@ test('cycles block objects and descendants',()=>{
 test('duplicate relationships are ignored and self-reference is warned',()=>{
  const p=plan(['A','B'],{B:[{field:'x',target:'A'},{field:'x',target:'A'},{field:'self',target:'B'}]});
  assert.equal(p.edges.length,1);assert.equal(p.selfReferences.length,1);assert.deepEqual(Array.from(p.order),['A','B']);
+});
+
+test('selecting a child auto-selects all available parents across multiple levels',()=>{
+ const rel={
+  CaseStage:[{field:'case',target:'Cases'},{field:'stage',target:'ProcessStages'},{field:'status',target:'CaseStageStatus'}],
+  Cases:[{field:'process',target:'Process'}],
+  ProcessStages:[{field:'process',target:'Process'}]
+ };
+ const result=selection().withParents(['CaseStage'],
+   ['CaseStage','Cases','Process','ProcessStages','CaseStageStatus','Unrelated'],rel);
+ assert.deepEqual(Array.from(result.selected),['CaseStage','CaseStageStatus','Cases','Process','ProcessStages']);
+ assert.deepEqual(Array.from(result.added),['CaseStageStatus','Cases','Process','ProcessStages']);
+ assert.deepEqual(Array.from(result.missing),[]);
+ const p=plan(result.selected,rel);
+ assert.ok(p.stages.findIndex(stage=>stage.includes('Process'))<p.stages.findIndex(stage=>stage.includes('Cases')));
+ assert.ok(p.stages.findIndex(stage=>stage.includes('Cases'))<p.stages.findIndex(stage=>stage.includes('CaseStage')));
+});
+
+test('unavailable parents remain external; they are not selected from other ZIPs',()=>{
+ const r=selection().withParents(['AbsenceCatalogue'],['AbsenceCatalogue','AbsenceTypeCatalogue'],{
+  AbsenceCatalogue:[{field:'type',target:'AbsenceTypeCatalogue'},{field:'lapse',target:'AbsenceLapseCatalogue'}]
+ });
+ assert.deepEqual(Array.from(r.selected),['AbsenceCatalogue','AbsenceTypeCatalogue']);
+ assert.deepEqual(Array.from(r.missing),['AbsenceCatalogue → AbsenceLapseCatalogue']);
+});
+
+test('removing selected parent also removes transitive dependents but not unrelated objects',()=>{
+ const r=selection().withoutParent(['Process','Cases','CaseStage','ProcessStages','Unrelated'],'Process',{
+  Cases:[{field:'process',target:'Process'}],
+  CaseStage:[{field:'case',target:'Cases'},{field:'stage',target:'ProcessStages'}]
+ });
+ assert.deepEqual(Array.from(r.removed),['CaseStage','Cases','Process']);
+ assert.deepEqual(Array.from(r.selected),['ProcessStages','Unrelated']);
+});
+
+test('dependency selection handles cycles and multiple parents without looping',()=>{
+ const rel={A:[{field:'b',target:'B'}],B:[{field:'a',target:'A'}],C:[{field:'a',target:'A'},{field:'b',target:'B'}]};
+ const s=selection();
+ const r=s.withParents(['C'],['A','B','C'],rel);
+ assert.deepEqual(Array.from(r.selected),['A','B','C']);
+ const removed=s.withoutParent(r.selected,'A',rel);
+ assert.deepEqual(Array.from(removed.removed),['A','B','C']);
 });
