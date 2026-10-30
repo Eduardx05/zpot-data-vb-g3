@@ -26,7 +26,7 @@ function dependencyPlan(selected:readonly string[],outgoing:Record<string,readon
   }
   ready=[...next];
  }
- const unplanned=nodes.filter(n=>indegree.get(n)!>0),pending=new Set(unplanned),index=new Map<string,number>(),low=new Map<string,number>(),stack:string[]=[],inStack=new Set<string>(),cycles:string[]=[];
+ const unplanned=nodes.filter(n=>indegree.get(n)!>0),pending=new Set(unplanned),index=new Map<string,number>(),low=new Map<string,number>(),stack:string[]=[],inStack=new Set<string>(),cycles:string[][]=[];
  let pos=0;
  const visit=(node:string):void=>{
   index.set(node,pos);low.set(node,pos);pos++;stack.push(node);inStack.add(node);
