@@ -81,13 +81,13 @@ test('CSV-only exports infer Absence FK relations from exact column names',()=>{
  const all=['AbsenceCatalogue','AbsenceTypeCatalogue','AbsenceLapseCatalogue','AppraisalUsed','Cases','Unrelated'];
  const absence=ctx.ZPOTDependencyInference('AbsenceCatalogue',
   ['id','absenceTypeCatalogue','absenceLapseCatalogue','encargado'],all);
- assert.deepEqual(absence.map(x=>[x.field,x.target]).sort(),[
+ assert.deepEqual(Array.from(absence,x=>[x.field,x.target]).sort(),[
   ['absenceLapseCatalogue','AbsenceLapseCatalogue'],
   ['absenceTypeCatalogue','AbsenceTypeCatalogue']
  ]);
  const appraisal=ctx.ZPOTDependencyInference('AppraisalUsed',
   [{name:'id',type:'number'},{name:'cases',type:'number'},{name:'gestion',type:'string'}],all);
- assert.deepEqual(appraisal.map(x=>[x.field,x.target]),[['cases','Cases']]);
+ assert.deepEqual(Array.from(appraisal,x=>[x.field,x.target]),[['cases','Cases']]);
  assert.equal(ctx.ZPOTDependencyInference('Unrelated',['customerId','foo','random'],all).length,0);
 });
 test('Absence business precedence produces Type, Lapse then Absence without inventing an FK',()=>{
