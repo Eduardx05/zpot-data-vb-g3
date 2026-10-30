@@ -330,10 +330,17 @@ async function pubSend(){
    if(!session){
      if(PUB.limit==='ALL'&&!window.confirm('Se incluirán TODOS los registros seleccionados. ¿Confirmas que el destino es un ambiente aislado de desarrollo con respaldo?'))return;
      const packs=new Map();
-     for(const t of plan.order)packs.set(t,await pubConsolidated(t));
+     if(!window.ZPOTOracleIdTools)throw Error('Falta el módulo de relaciones por ID; reconstruye la aplicación y recarga.');
+     if(PUB.mode==='sync'&&!window.ZPOTOracleRecordSync)throw Error('Falta el módulo de sincronización Oracle; reconstruye la aplicación y recarga.');
+     for(const t of plan.order){
+       const pack=await pubConsolidated(t);
+       pack.rows=window.ZPOTOracleIdTools.sortSelfRows(t,pack.rows,pubRelationships([t])[t]||[]);
+       packs.set(t,pack);
+     }
+     if(PUB.mode==='sync')for(const [name,pack] of packs)if(pack.rows.some(r=>!String(r.id??'').trim()))throw Error('La sincronización por ID requiere que cada registro tenga un ID en '+name+'. Se canceló antes del envío.');
      if(packs.has('Configuration')&&packs.get('Configuration').rows.some(r=>/URL|HOST|ENDPOINT|TOKEN|PASS|SECRET/i.test(String(r.keyCatalog||r.key||''))))throw Error('Configuration contiene valores de otros ambientes: revisa esos parámetros antes de publicarlos.');
-     const report={format:'BNCR-ZPOT-Oracle-BO-API-v2',startedAt:new Date().toISOString(),url:base,mode:PUB.mode,preserveIds:PUB.preserveIds,environment:'OIC Desarrollo / aplicación publicada live',sources:[...consolidation].map(i=>({name:nominal(D[i]),filename:D[i].filename})),plan:{stages:plan.stages,edges:plan.edges,external:plan.external,selfReferences:plan.selfReferences},total:[...packs.values()].reduce((n,p)=>n+p.rows.length,0),success:0,skipped:0,failed:0,stopped:false,stages:[],tables:[],errors:[]};
-     session={signature,plan,packs,report,nextStage:0,failed:false,successfulIds:new Map()};
+     const report={format:'BNCR-ZPOT-Oracle-BO-API-v3',startedAt:new Date().toISOString(),url:base,mode:PUB.mode,preserveIds:PUB.preserveIds,environment:'OIC Desarrollo / aplicación publicada live',sources:[...consolidation].map(i=>({name:nominal(D[i]),filename:D[i].filename})),plan:{stages:plan.stages,edges:plan.edges,external:plan.external,selfReferences:plan.selfReferences},total:[...packs.values()].reduce((n,p)=>n+p.rows.length,0),success:0,created:0,updated:0,skipped:0,failed:0,stopped:false,stages:[],tables:[],operations:[],operationsTruncated:false,errors:[],idMappings:{}};
+     session={signature,plan,packs,report,nextStage:0,failed:false,successfulIds:new Map(),idMap:window.ZPOTOracleIdTools.createRegistry()};
      PUB.stageSession=session;PUB.results=report;
    }
    let start=session.nextStage,end=PUB.stepMode?Math.min(start+1,plan.stages.length):plan.stages.length;
@@ -343,7 +350,7 @@ async function pubSend(){
    const stopBtn=$('pub-stop');if(stopBtn)stopBtn.disabled=false;
    const report=session.report;
    for(let stageIndex=start;stageIndex<end;stageIndex++){
-     const tablesAtStage=plan.stages[stageIndex],stageReport={stage:stageIndex+1,objects:tablesAtStage,status:'validating',startedAt:new Date().toISOString(),success:0,failed:0,skipped:0,remoteReferencesChecked:0};
+     const tablesAtStage=plan.stages[stageIndex],stageReport={stage:stageIndex+1,objects:tablesAtStage,status:'validating',startedAt:new Date().toISOString(),success:0,created:0,updated:0,failed:0,skipped:0,remoteReferencesChecked:0};
      report.stages.push(stageReport);
      // Verify all current-stage collection endpoints and FK references before ANY write in this stage.
      pubSetStatus(`Validando relaciones antes de la etapa ${stageIndex+1}/${plan.stages.length}…`);
@@ -357,7 +364,7 @@ async function pubSend(){
      for(const t of tablesAtStage){
        if(PUB.stop)throw Error('Publicación detenida por el usuario.');
        const pack=session.packs.get(t);
-       const tab={name:t,stage:stageIndex+1,input:pack.input,unique:pack.unique,planned:pack.rows.length,succeeded:0,failed:0,skipped:0};
+       const tab={name:t,stage:stageIndex+1,input:pack.input,unique:pack.unique,planned:pack.rows.length,succeeded:0,created:0,updated:0,failed:0,skipped:0};
        report.tables.push(tab);pubLog(`Etapa ${stageIndex+1}/${plan.stages.length} · ${t}: ${pack.rows.length} fila(s)`);
        for(const r of pack.rows){
          if(PUB.stop)throw Error('Publicación detenida por el usuario.');
@@ -394,13 +401,14 @@ async function pubSend(){
    }
    const completed=session.nextStage>=plan.stages.length;
    if(completed)report.finishedAt=new Date().toISOString();
+   report.idMappings=session.idMap.snapshot();
    PUB.results=report;
    pubSetStatus(completed?`Todas las etapas terminadas: ${fmt(report.success)} registros enviados, ${fmt(report.failed)} fallidos.`:`Etapa ${session.nextStage} de ${plan.stages.length} completada. Revisa la auditoría y confirma la etapa ${session.nextStage+1}.`,'ok');
    let reportBtn=$('pub-report');if(reportBtn)reportBtn.disabled=false;
    let nextBtn=$('pub-send');if(nextBtn)nextBtn.textContent=completed?'Plan finalizado':'Enviar etapa '+(session.nextStage+1)+' de '+plan.stages.length;
    let current=$('pub-stage-current');if(current)current.textContent=completed?'Todas las etapas completadas. Descarga el reporte JSON.':`Etapa ${session.nextStage} terminada. Siguiente: ${plan.stages[session.nextStage].join(', ')}`;
  }catch(e){
-   if(session){session.failed=true;session.report.stopped=true;session.report.finishedAt=new Date().toISOString();session.report.errors.push({stage:session.nextStage+1,message:e.message});PUB.results=session.report;}
+   if(session){session.failed=true;session.report.stopped=true;session.report.finishedAt=new Date().toISOString();session.report.errors.push({stage:session.nextStage+1,message:e.message});session.report.idMappings=session.idMap.snapshot();PUB.results=session.report;}
    pubSetStatus('Carga detenida: '+e.message,'danger');
    pubLog('Detenido: '+e.message);
    const b=$('pub-report');if(b&&PUB.results)b.disabled=false;
