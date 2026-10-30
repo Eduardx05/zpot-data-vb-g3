@@ -2,7 +2,7 @@
    Runs locally against ZIPs already loaded by the explorer. */
 (function(){
  'use strict';
- const F={oldIndex:-1,newIndex:-1,preview:null,signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false,detailTable:''};
+ const F={oldIndex:-1,newIndex:-1,preview:null,delta:null,inputs:null,decisions:{},signature:'',busy:false,destination:'zip',filter:'',issuesOnly:false,detailTable:'',baselineConfirmed:false,issueSearch:'',issueSeverity:'all',issuePage:0,issueShowResolved:true,bulkTable:''};
  const safe=(value)=>esc(String(value??''));
  const name=(index)=>D[index]?nominal(D[index]):'No seleccionado';
  const choices=(current,exclude)=>'<option value="-1">Selecciona un ZIP…</option>'+
@@ -12,8 +12,8 @@
  const valid=()=>Number.isInteger(F.oldIndex)&&Number.isInteger(F.newIndex)&&F.oldIndex>=0&&F.newIndex>=0&&
   F.oldIndex!==F.newIndex&&D[F.oldIndex]&&!D[F.oldIndex].isDemo&&D[F.newIndex]&&!D[F.newIndex].isDemo;
  function ruleLabel(policy){return {
-  'catalog-old':'Catálogos: conservar antiguos + incorporar nuevos',
-  cases:'Cases: conservar históricos + agregar cambios por opportunityNumber',
+  'catalog-old':'Catálogos existentes → conservar; nuevos → incorporar',
+  cases:'Cases existentes → conservar; nuevos → agregar o actualizar por oportunidad',
   configuration:'Configuration: aplicar valores con fecha posterior verificable',
   operations:'Operación e historiales: preservar ambas versiones'
  }[policy]||policy;}
@@ -24,20 +24,21 @@
  function renderFusion(){
   const good=valid(),result=F.preview&&F.signature===signature()?F.preview:null;
   const note='<div class="notice"><strong>Flujo independiente.</strong> Esta página no cambia la publicación existente. Los dos ZIP se leen localmente; se crea un tercer ZIP y su auditoría sin modificar los originales ni escribir en Oracle. Los conflictos de identidad y las referencias sin resolver bloquean el envío directo.</div>';
-  let html=pagehead('Fusionar dos aplicaciones Oracle','Consolida catálogos de la versión antigua con Cases y cambios recientes de la versión nueva. Conserva las relaciones por ID y permite elegir dónde depositar el resultado.')+note;
+  let html=pagehead('Consolidar ZIP existente en Oracle + ZIP de cambios','Marca qué ZIP ya está cargado en Oracle. El otro ZIP solo incorporará nuevos registros o actualizará diferencias verificables, sin recargar los históricos.')+note;
   html+=block('1 · Elegir las dos aplicaciones',`
    <div class="settings-grid">
-    <label>ZIP de la aplicación antigua (base de catálogos)<select id="fusion-old">${choices(F.oldIndex,F.newIndex)}</select></label>
-    <label>ZIP de la aplicación nueva (Cases y configuraciones)<select id="fusion-new">${choices(F.newIndex,F.oldIndex)}</select></label>
+    <label>ZIP A · Ya existe en Oracle (conservar los IDs actuales)<select id="fusion-old">${choices(F.oldIndex,F.newIndex)}</select></label>
+    <label>ZIP B · Agregar o actualizar solo lo necesario<select id="fusion-new">${choices(F.newIndex,F.oldIndex)}</select></label>
    </div>
    <div class="actions"><button class="btn" id="fusion-add">＋ Cargar uno o dos ZIP adicionales</button></div>
-   <p class="micro">La asignación «antigua/nueva» la determina tu selección, no el nombre del archivo. No se aceptan fuentes DEMO. Los ZIP deben contener archivos CSV de los BO.</p>`);
+   <label class="check-inline"><input type="checkbox" id="fusion-baseline-confirm" ${F.baselineConfirmed?'checked':''}/> Confirmo que el ZIP A es una exportación del Oracle Live DESTINO donde se conservarán los IDs; sus registros existentes NO se volverán a publicar si no cambiaron.</label>
+    <p class="micro">La marca indica lo que tú confirmas, no una comprobación de estado en tiempo real. Si Oracle cambió después de exportar el ZIP A, actualiza ese ZIP antes de generar el diferencial. No se aceptan ZIP DEMO.</p>`);
   html+=block('2 · Reglas de fusión',`
    <div class="fusion-rules">
-    <div><strong>Catálogos</strong><small>Preservar los valores históricos. Nuevos registros se incorporan sin sobrescribir IDs.</small></div>
-    <div><strong>Cases</strong><small>Unir por opportunityNumber cuando esté disponible y no sea ambiguo. Si el mismo ID identifica casos distintos, generar ID nuevo y reasociar hijos.</small></div>
-    <div><strong>Configuration</strong><small>Combinar por keyCatalog/key. Preferir un valor nuevo solo cuando su lastUpdateDate sea posterior.</small></div>
-    <div><strong>Historiales y etapas</strong><small>Preservar filas de ambos orígenes; nunca deduplicar por coincidencia de ID solamente.</small></div>
+    <div><strong>Catálogos</strong><small>ZIP A conserva todos sus IDs. ZIP B solo incorpora valores nuevos o completa coincidencias verificadas.</small></div>
+    <div><strong>Cases</strong><small>Los 14,000 casos del ZIP A no se reenvían si no cambiaron. Los de ZIP B se agregan o actualizan por opportunityNumber verificable.</small></div>
+    <div><strong>Configuration</strong><small>Actualizar solo los campos que cambiaron cuando la fecha del ZIP B sea posterior; conservar los IDs del destino.</small></div>
+    <div><strong>Historiales y etapas</strong><small>No modificar los existentes de ZIP A. Registrar nuevas filas de ZIP B y validar la identidad de cada referencia.</small></div>
    </div>
    <div class="actions"><button class="btn btn-primary" id="fusion-analyze" ${!good||F.busy?'disabled':''}>Analizar y generar vista previa</button></div>
    <div id="fusion-status" class="notice">${F.busy?'Analizando tablas de los dos ZIP…':result?'Análisis completado. Revisa los conflictos y selecciona el destino.':'Selecciona ambos ZIP para comenzar.'}</div>`);
