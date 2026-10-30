@@ -515,7 +515,7 @@ async function pubSend(){
            }
            const mapped=session.idMap.rewrite(sourcePayload,refs);
            const payload=mapped.row;
-           let result,operation;
+           let result,operation,matchedByUnique=null;
            const headers={Accept:'application/json','Content-Type':'application/json'};
            const postBody=JSON.stringify(payload);
            // Oracle PATCH changes fields on an existing row; never try to change
@@ -532,7 +532,7 @@ async function pubSend(){
                  const previousOwner=session.idMap.ownerOf(t,matched.id);
                  if(previousOwner&&previousOwner!==sourceId)
                    throw Error('La clave única '+t+'.'+matched.field+' apunta al ID Oracle '+matched.id+' que ya está asociado al origen '+previousOwner+'. Se requiere conciliación manual.');
-                 matchedUnique=matched;
+                 matchedUnique=matched;matchedByUnique=matched.field;
                }
                return matched;
              }:undefined;
@@ -574,7 +574,7 @@ async function pubSend(){
              if(!session.successfulIds.has(t))session.successfulIds.set(t,new Set());
              session.successfulIds.get(t).add(sourceId);
            }
-           if(report.operations.length<10000)report.operations.push({stage:stageIndex+1,object:t,originalId:sourceId,oracleId:String(oracleId??''),operation,remappedForeignKeys:mapped.replacements});
+           if(report.operations.length<10000)report.operations.push({stage:stageIndex+1,object:t,originalId:sourceId,oracleId:String(oracleId??''),operation,matchedByUnique,remappedForeignKeys:mapped.replacements});
            else report.operationsTruncated=true;
            pubLog('✓ '+t+' ID '+sourceId+' → Oracle '+String(oracleId??'sin ID')+' · '+(operation==='updated'?'actualizado':'creado')+(mapped.replacements.length?' · '+mapped.replacements.length+' relación(es) reasociadas':''));
 
