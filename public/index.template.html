@@ -415,6 +415,8 @@ async function pubRecoverSkippedParent(session,parent,sourceId,base){
  const row=pack?.rows.find(x=>String(x.id??'').trim()===sourceId);
  if(!row)return false;
  const payload=pubPayload(parent,row,pack.cols);
+ if(payload[field]===undefined||payload[field]===null||String(payload[field]).trim()==='')
+  return false; // Never link a skipped parent without a populated unique value.
  const found=await pubFindUnique(parent,payload,base,'normalized',field);
  if(!found){session.unresolvedSkippedParents.add(key);return false;}
  if(found.field!==field)throw pubSkipError('Oracle devolvió una clave única distinta para '+parent+' ID '+sourceId);
