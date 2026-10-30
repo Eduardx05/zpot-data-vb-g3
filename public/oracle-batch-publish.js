@@ -55,7 +55,7 @@
   if(ctx.currentSignature!==ctx.signature)return report('Los ZIP cambiaron. Vuelve a analizar.',true);
   const typed=document.getElementById('fusion-batch-phrase')?.value?.trim();
   if(typed!=='CARGAR DESARROLLO')return report('Escribe CARGAR DESARROLLO exactamente.',true);
-  if(ctx.report)return report('Hay un envío anterior registrado. Descarga su auditoría y concilia los IDs antes de otro intento.',true);
+  if(ctx.report&&ctx.report.status!=='paused')return report('El envío anterior no está en pausa segura. Descarga la auditoría y concilia sus IDs antes de intentar otra vez.',true);
   const base=pubUrlTemplate(PUB.url);
   if(!pubIsConfirmedDevTarget(base))return report('Endpoint de Oracle no autorizado.',true);
   if(!window.ZPOTOracleBatchRunner)return report('Falta el módulo batch; ejecuta npm run build.',true);
@@ -67,19 +67,21 @@
    'Batch de '+ctx.size+' y hasta '+ctx.concurrency+' solicitudes simultáneas.\n'+
    'No hay reintentos automáticos después de un error o timeout.\n¿Autorizar?';
   if(!window.confirm(label))return;
-  const audit={
+  const audit=ctx.report||{
    format:'BNCR-ZPOT-ORACLE-BATCH-v1',startedAt:new Date().toISOString(),
    endpoint:base,sources:{existing:ctx.oldSha,incoming:ctx.newSha},
    configuration:{size:ctx.size,concurrency:ctx.concurrency},
    total:ctx.delta.totals.totalWrites,confirmed:0,
    batches:[],completed:{},mappings:{},status:'running'
   };
+  audit.status='running';audit.resumedAt=new Date().toISOString();
   set({batchBusy:true,batchStop:false,batchReport:audit});
   report('API batch: iniciando envío de '+audit.total+' registros diferenciales…');
   try{
    const result=await window.ZPOTOracleBatchRunner.run({
     changes:ctx.delta.operations,tables:ctx.delta.tables,relations:ctx.inputs.relations,
     stages:stages.stages,batchSize:ctx.size,concurrency:ctx.concurrency,
+    resume:{completed:audit.completed,mappings:audit.mappings},
     normalize:(table,row,cols)=>normalize(table,row,cols,ctx.inputs.relations),
     shouldStop:()=>info()?.stop,
     onCommit:batch=>{
@@ -113,12 +115,13 @@
    audit.mappings=result.mappings;
    report('Envío batch finalizado: '+audit.confirmed+' registros confirmados. Descarga la auditoría.');
   }catch(e){
-   audit.status='needs-reconciliation';audit.stoppedAt=new Date().toISOString();
+   audit.status=/Publicación batch detenida por el usuario/.test(e.message)?'paused':'needs-reconciliation';
+   audit.stoppedAt=new Date().toISOString();
    audit.error=e.message;
    report('Batch detenido: '+e.message+'. Descarga la auditoría y revisa los IDs antes de reintentar.',true);
   }finally{
    set({batchBusy:false,batchStop:false});
-   const btn=document.getElementById('fusion-batch-start');if(btn)btn.disabled=true;
+   const btn=document.getElementById('fusion-batch-start');if(btn)btn.disabled=audit.status!=='paused';
    const stop=document.getElementById('fusion-batch-stop');if(stop)stop.disabled=true;
    const exportBtn=document.getElementById('fusion-batch-report');if(exportBtn)exportBtn.disabled=false;
   }
