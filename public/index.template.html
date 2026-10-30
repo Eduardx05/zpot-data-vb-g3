@@ -97,7 +97,7 @@ const PUB = {
   url:PUB_DEV_URL, auth:'public', testObject:'Configuration', mode:'sync', preserveIds:true, tableSet:new Set(['AbsenceCatalogue']), limit:'1',
   testPassed:false, busy:false, stop:false, includeEmpty:false, approved:false, skipConflicts:true,
   results:null, testedUrl:'', verifiedTable:'', csrfHint:'',
-  maxErrors:10, sleepMs:120, stepMode:true, stageSession:null, focusObject:'ALL', mapScope:'selected', restoredMappings:null, restoredCount:0, restoredVersion:0, restoredFrom:''
+  maxErrors:10, sleepMs:120, stepMode:true, autoStartNext:false, stageSession:null, focusObject:'ALL', mapScope:'selected', restoredMappings:null, restoredCount:0, restoredVersion:0, restoredFrom:''
 };
 const PUB_SYSTEM_FIELDS = new Set(['creationDate','lastUpdateDate','createdBy','lastUpdatedBy','abcsChangeNumber']);
 function pubSameOrigin(){return window.location.protocol==='https:' && location.origin!== 'null';}
@@ -305,7 +305,7 @@ function pubPlanMarkup(plan){
  const external=plan.external.length?`<div class="notice"><strong>Referencias a tablas no seleccionadas (${plan.external.length}).</strong> Antes de insertar, el publicador comprobará mediante GET que los IDs referenciados existan en Oracle (hasta 250 por etapa). Ejemplos: ${plan.external.slice(0,8).map(e=>`<code>${esc(e.child)}.${esc(e.field)} → ${esc(e.parent)}</code>`).join(', ')}.</div>`:'';
  const cycles=plan.cycles.length?`<div class="notice danger"><strong>Relaciones circulares detectadas: no se publicarán objetos implicados.</strong> ${plan.cycles.map(c=>esc(c.join(' ↔ '))).join(' · ')}. ${plan.unplanned.length} objeto(s) sin orden seguro. Revisa o separa esas dependencias.</div>`:'';
  const self=plan.selfReferences.length?`<div class="notice"><strong>Autorreferencias (${plan.selfReferences.length}):</strong> se validará el registro padre antes de insertar cada fila.</div>`:'';
- return `<div class="notice"><strong>Plan consolidado de carga.</strong> ${plan.stages.length} etapa(s) · ${totalUnique} BO únicos de ${pubSelectedTables().length} seleccionados · ${plan.edges.length} relaciones internas. Cada BO aparece una sola vez en su etapa. <strong>Los objetos dentro de una misma etapa son independientes entre sí</strong>; el orden entre etapas respeta las dependencias. <code>orderPos</code> del flujo dinámico NO define el orden de importación.</div><div class="zpot-plan-grid">${items||'<p class="empty">Selecciona objetos para generar el plan.</p>'}</div>${external}${cycles}${self}<label class="check-inline"><input id="pub-step-mode" type="checkbox" ${PUB.stepMode?'checked':''}/> Publicar una etapa a la vez y confirmar manualmente la siguiente (recomendado)</label><div id="pub-stage-current" class="notice">${valid?`Siguiente etapa: ${Math.min(session.nextStage+1,plan.stages.length)} de ${plan.stages.length}.`:'Prepara la vista previa para revisar el plan antes del envío.'}</div>`;
+ return `<div class="notice"><strong>Plan consolidado de carga.</strong> ${plan.stages.length} etapa(s) · ${totalUnique} BO únicos de ${pubSelectedTables().length} seleccionados · ${plan.edges.length} relaciones internas. Cada BO aparece una sola vez en su etapa. <strong>Los objetos dentro de una misma etapa son independientes entre sí</strong>; el orden entre etapas respeta las dependencias. <code>orderPos</code> del flujo dinámico NO define el orden de importación.</div><div class="zpot-plan-grid">${items||'<p class="empty">Selecciona objetos para generar el plan.</p>'}</div>${external}${cycles}${self}<label class="check-inline"><input id="pub-step-mode" type="checkbox" ${PUB.stepMode?'checked':''}/> Publicar por etapas (con confirmación manual cuando el inicio automático esté desactivado)</label><label class="check-inline"><input id="pub-auto-next" type="checkbox" ${PUB.autoStartNext?'checked':''}/> Iniciar automáticamente la siguiente etapa sin intervención humana (tras confirmar el envío inicial; respeta dependencias, omisiones y botón Detener)</label><div id="pub-stage-current" class="notice">${valid?`Siguiente etapa: ${Math.min(session.nextStage+1,plan.stages.length)} de ${plan.stages.length}.`:'Prepara la vista previa para revisar el plan antes del envío.'}</div>`;
 }
 function renderPublish(){
  let names=pubAvailable();for(const name of [...PUB.tableSet])if(!names.includes(name))PUB.tableSet.delete(name);pubIncludeParents();
@@ -480,7 +480,7 @@ function pubCheckpointState(session){
   schemaHash:String(D[conSchema]?.sha||''),
   tables:pubSelectedTables(),schemaMode,includeMode,
   mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,
-  includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,stepMode:PUB.stepMode,
+  includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,stepMode:PUB.stepMode,autoStartNext:PUB.autoStartNext,
   stages:session.plan.stages.map(stage=>[...stage]),
   rowCounts:Object.fromEntries([...session.packs].map(([name,pack])=>[name,pack.rows.length])),
   cursor:{...session.cursor},nextStage:session.nextStage,
@@ -625,7 +625,7 @@ async function pubUpgradeLegacyAudit(raw){
   tables:pubSelectedTables(),schemaMode,includeMode,
   mode:PUB.mode,limit:PUB.limit,preserveIds:true,
   includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,
-  stepMode:PUB.stepMode,stages:plan.stages,
+  stepMode:PUB.stepMode,autoStartNext:PUB.autoStartNext,stages:plan.stages,
   rowCounts:Object.fromEntries([...packs].map(([name,pack])=>[name,pack.rows.length])),
   cursor,nextStage:cursor.stageIndex,successfulIds:confirmed,skippedIds:skipped,
   idMappings:registry.snapshot(),unsafeRetry:false,inFlight:false,outcome:'paused'
@@ -668,7 +668,7 @@ async function pubResumeFromJson(raw){
  schemaMode=state.schemaMode;includeMode=state.includeMode;
  PUB.tableSet=new Set(state.tables);PUB.mode=state.mode;PUB.limit=String(state.limit);
  PUB.preserveIds=true;PUB.includeEmpty=Boolean(state.includeEmpty);
- PUB.skipConflicts=Boolean(state.skipConflicts);PUB.stepMode=Boolean(state.stepMode);
+ PUB.skipConflicts=Boolean(state.skipConflicts);PUB.stepMode=Boolean(state.stepMode);PUB.autoStartNext=Boolean(state.autoStartNext);
  if(pubRecoveryFingerprint()!==state.fingerprint)throw Error('La selección, los ZIP o el esquema difieren del JSON original.');
  const plan=pubGetPlan();
  if(JSON.stringify(plan.stages)!==JSON.stringify(state.stages))
@@ -767,7 +767,7 @@ async function pubSend(){
      if(PUB.restoredMappings){session.idMap.load(PUB.restoredMappings);report.restoredMappings=PUB.restoredCount;}
      PUB.stageSession=session;PUB.results=report;
    }
-   let start=session.nextStage,end=PUB.stepMode?Math.min(start+1,plan.stages.length):plan.stages.length;
+   let start=session.nextStage,end=(PUB.autoStartNext||!PUB.stepMode)?plan.stages.length:Math.min(start+1,plan.stages.length);
    if(!window.confirm(`ENVÍO REAL A ORACLE DESARROLLO\nEtapa(s): ${start+1} a ${end} de ${plan.stages.length}\nTablas: ${plan.stages.slice(start,end).flat().join(', ')}\nModo: ${PUB.mode}\nRegistros por objeto: ${PUB.limit}${session.report.configurationReview&&plan.stages.slice(start,end).some(s=>s.includes('Configuration'))?'\nConfiguration: '+session.report.configurationReview.total+' registros, '+session.report.configurationReview.flaggedCount+' parámetros de ambiente (se incluyen tal cual)':''}\n\n¿Confirmas continuar con este tramo?`))return;
    if(session.failed){
      session.failed=false;
@@ -926,7 +926,7 @@ async function pubSend(){
      session.nextStage=stageIndex+1;
      session.cursor={stageIndex:stageIndex+1,tableIndex:0,rowIndex:0};
      pubRefreshCheckpoint(session);
-     pubLog('✓ Etapa '+(stageIndex+1)+' finalizada: '+stageReport.success+' enviados, '+stageReport.skipped+' omitidos. '+(PUB.stepMode?'Confirma la siguiente etapa cuando estés listo.':''));
+     pubLog('✓ Etapa '+(stageIndex+1)+' finalizada: '+stageReport.success+' enviados, '+stageReport.skipped+' omitidos. '+((PUB.autoStartNext||!PUB.stepMode)?(stageIndex+1<end?'Iniciando automáticamente etapa '+(stageIndex+2)+'.':''):'Confirma la siguiente etapa cuando estés listo.'));
    }
    const completed=session.nextStage>=plan.stages.length;
    if(completed){report.finishedAt=new Date().toISOString();report.outcome=report.skipped?'completed-with-omissions':'completed';}
@@ -1062,7 +1062,14 @@ $('main').addEventListener('change',async e=>{let x=e.target;
  if(x.id==='pub-test-object'){PUB.testObject=x.value.trim();PUB.testPassed=false;}
  if(x.id==='pub-limit')PUB.limit=x.value;
  if(x.id==='pub-delay')PUB.sleepMs=Math.min(5000,Math.max(0,Number(x.value)||0));
- if(x.id==='pub-step-mode'){PUB.stepMode=x.checked;PUB.stageSession=null;pubSetStatus('Se actualizó el modo de publicación: prepara nuevamente el plan.');}
+ if(x.id==='pub-step-mode'){
+  PUB.stepMode=x.checked;
+  pubSetStatus(PUB.autoStartNext?'Inicio automático activado: la publicación continuará por las etapas pendientes.':PUB.stepMode?'Modo manual activado: habrá que iniciar cada etapa.':'Modo continuo activado: se ejecutarán las etapas pendientes.');
+ }
+ if(x.id==='pub-auto-next'){
+  PUB.autoStartNext=x.checked;
+  pubSetStatus(PUB.autoStartNext?'Inicio automático habilitado: después de confirmar la próxima publicación se continuarán todas las etapas pendientes sin solicitar otra aprobación.':'Inicio automático desactivado; la siguiente publicación seguirá la configuración por etapas.');
+ }
  if(x.id==='pub-id')PUB.preserveIds=x.checked;
  if(x.id==='pub-empty')PUB.includeEmpty=x.checked;
  if(x.id==='pub-skip-conflicts')PUB.skipConflicts=x.checked;
@@ -1072,7 +1079,7 @@ $('main').addEventListener('change',async e=>{let x=e.target;
 const _pubOriginalMakeConfig = makeConfig;
 makeConfig = function(){
  const data=_pubOriginalMakeConfig();
- data.oracle={endpoint:PUB.url,auth:PUB.auth,testObject:PUB.testObject,mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,intervalMs:PUB.sleepMs};
+ data.oracle={endpoint:PUB.url,auth:PUB.auth,testObject:PUB.testObject,mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,stepMode:PUB.stepMode,autoStartNext:PUB.autoStartNext,intervalMs:PUB.sleepMs};
  return data;
 };
 const _pubOriginalApplyConfig = applyConfig;
@@ -1084,7 +1091,7 @@ applyConfig = function(cfg,refresh=true){
    if(typeof v.testObject==='string'&&/^[A-Za-z][A-Za-z0-9_]*$/.test(v.testObject))PUB.testObject=v.testObject;
    if(['sync','create','update','upsert'].includes(v.mode))PUB.mode=v.mode;
    if(['1','5','25','100','500','1000','ALL'].includes(String(v.limit)))PUB.limit=String(v.limit);
-   PUB.preserveIds=Boolean(v.preserveIds);PUB.includeEmpty=Boolean(v.includeEmpty);if(typeof v.skipConflicts==='boolean')PUB.skipConflicts=v.skipConflicts;
+   PUB.preserveIds=Boolean(v.preserveIds);PUB.includeEmpty=Boolean(v.includeEmpty);if(typeof v.skipConflicts==='boolean')PUB.skipConflicts=v.skipConflicts;if(typeof v.stepMode==='boolean')PUB.stepMode=v.stepMode;if(typeof v.autoStartNext==='boolean')PUB.autoStartNext=v.autoStartNext;
    PUB.sleepMs=Math.min(5000,Math.max(0,Number(v.intervalMs)||0));
    PUB.testPassed=false;PUB.approved=false;
  }
