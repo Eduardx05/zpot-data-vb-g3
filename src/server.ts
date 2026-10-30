@@ -149,6 +149,76 @@ async function oracle(req:IncomingMessage,res:ServerResponse,url:URL):Promise<vo
   } catch(e){json(res,502,{error:e instanceof Error&&e.name==='AbortError'?'Tiempo de espera agotado en Oracle.':'No se pudo establecer conexión segura con Oracle.'});}
   finally{clearTimeout(timeout);}
 }
+/**
+ * Oracle Visual Builder Business Objects batch:
+ * POST <resources/data> with application/vnd.oracle.adf.batch+json.
+ * Unlike the single-record proxy, this accepts multiple atomic operations.
+ * The host, application and allowed BO paths remain strictly pinned.
+ */
+type OracleBatchPart={id:string;path:string;operation:'create'|'update';payload:Record<string,unknown>};
+function validateOracleBatch(input:unknown):OracleBatchPart[]{
+ if(!input||typeof input!=='object'||Array.isArray(input))throw Error('Batch JSON inválido.');
+ const parts=(input as {parts?:unknown}).parts;
+ if(!Array.isArray(parts)||parts.length<1||parts.length>25)throw Error('Batch debe contener entre 1 y 25 operaciones.');
+ const seen=new Set<string>(),updatePaths=new Set<string>();
+ const rows:OracleBatchPart[]=[];
+ for(const part of parts){
+  if(!part||typeof part!=='object'||Array.isArray(part))throw Error('Operación batch inválida.');
+  const {id,path,operation,payload}=part as Record<string,unknown>;
+  if(typeof id!=='string'||!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(id)||seen.has(id))
+   throw Error('Identificador batch duplicado o inválido.');
+  seen.add(id);
+  if(operation!=='create'&&operation!=='update')throw Error('Batch solo permite crear o actualizar registros.');
+  if(typeof path!=='string'||!/^\/[A-Za-z][A-Za-z0-9_]*(?:\/[A-Za-z0-9._~-]+)?$/.test(path))
+   throw Error('Ruta del BO inválida: no admite URLs externas ni parámetros de consulta.');
+  const partsPath=path.slice(1).split('/');
+  if(operation==='create'&&partsPath.length!==1||operation==='update'&&partsPath.length!==2)
+   throw Error('Create requiere colección y update requiere ID.');
+  if(!payload||typeof payload!=='object'||Array.isArray(payload))
+   throw Error('La operación batch debe incluir un objeto JSON.');
+  if(operation==='update'){
+   if(Object.hasOwn(payload,'id'))throw Error('No se puede cambiar la clave primaria con batch update.');
+   if(updatePaths.has(path))throw Error('Dos actualizaciones sobre el mismo ID en un batch.');
+   updatePaths.add(path);
+  }
+  rows.push({id,path,operation,payload:payload as Record<string,unknown>});
+ }
+ return rows;
+}
+async function oracleBatch(req:IncomingMessage,res:ServerResponse):Promise<void>{
+ if(req.method!=='POST')return json(res,405,{error:'Batch requiere POST.'});
+ if(!ENABLE_WRITES)return json(res,403,{error:'Escritura batch deshabilitada. ENABLE_ORACLE_WRITES=true solo en desarrollo.'});
+ if(req.headers['x-zpot-write-confirm']!=='CARGAR DESARROLLO'||req.headers['x-zpot-request']!=='1')
+  return json(res,403,{error:'Falta autorización explícita para la escritura batch.'});
+ const raw=await readBody(req,1024*1024);
+ let parts:OracleBatchPart[];
+ try{parts=validateOracleBatch(JSON.parse(raw));}
+ catch(error){return json(res,400,{error:error instanceof Error?error.message:'Batch inválido.'});}
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),60000);
+ try{
+  const upstream=new URL(ORACLE_BASE.toString());
+  const response=await fetch(upstream,{
+   method:'POST',redirect:'manual',signal:controller.signal,
+   headers:{Authorization:AUTH_MODE==='public'?'Public':'Bearer '+TOKEN,
+    Accept:'application/vnd.oracle.adf.batch+json',
+    'Content-Type':'application/vnd.oracle.adf.batch+json'},
+   body:JSON.stringify({parts})
+  });
+  if(response.status>=300&&response.status<400)return json(res,502,{error:'Redirección Oracle bloqueada en batch.'});
+  const rawResponse=await response.text();
+  if(rawResponse.length>4*1024*1024)return json(res,502,{error:'Respuesta batch demasiado grande.'});
+  const contentType=response.headers.get('content-type')||'';
+  if(!/json/i.test(contentType)||!rawResponse.trim().startsWith('{'))
+   return json(res,502,{error:'Oracle no respondió con un JSON batch válido. Estado del lote no confirmado.'});
+  // Un HTTP 200 no confirma por sí solo las escrituras: el cliente valida
+  // exhaustivamente cada part e ID antes de avanzar al próximo lote.
+  send(res,response.status,rawResponse,'application/json; charset=utf-8');
+ }catch(error){
+  json(res,502,{error:error instanceof Error&&error.name==='AbortError'?
+   'Oracle agotó el tiempo para el batch. El resultado del lote es INCIERTO; verifica los IDs antes de reintentar.':
+   'Fallo de conexión con Oracle. Estado del lote incierto: no repetir automáticamente.'});
+ }finally{clearTimeout(timeout);}
+}
 const server=createServer(async(req,res)=>{
   if(!checkLocalRequest(req))return json(res,403,{error:'Origen no permitido.'});
   const url=new URL(req.url||'/',`http://127.0.0.1:${PORT}`);
@@ -157,6 +227,7 @@ const server=createServer(async(req,res)=>{
     if(req.method==='GET' && url.pathname==='/status.js')return send(res,200,readFileSync(resolve(publicDir,'status.js'),'utf8'),'text/javascript; charset=utf-8');
     if(req.method==='GET' && ['/dependency-planner.js','/bo-master-model.js','/oracle-id-mapping.js','/oracle-record-sync.js','/configuration-policy.js','/dual-app-merge.js','/dual-app-fusion.js','/oracle-merge-delta.js'].includes(url.pathname))return send(res,200,readFileSync(resolve(publicDir,url.pathname.slice(1)),'utf8'),'text/javascript; charset=utf-8');
     if(req.method==='GET' && url.pathname==='/api/health')return json(res,200,{ok:true,mode:'local-proxy',writeEnabled:ENABLE_WRITES,authMode:AUTH_MODE,oracleBase:ORACLE_BASE.toString(),preloadedSources:JSON.parse(privateJson('sources.json',PLACEHOLDER)).length});
+    if(url.pathname==='/api/oracle-batch')return await oracleBatch(req,res);
     if(url.pathname.startsWith('/api/oracle/'))return await oracle(req,res,url);
     return json(res,404,{error:'Ruta no encontrada.'});
   }catch(e){const code=Number((e as {code?:number}).code)||500;json(res,code,{error:e instanceof Error?e.message:'Error del servidor.'});}
