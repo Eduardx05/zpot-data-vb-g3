@@ -59,9 +59,7 @@
      <select id="fusion-detail-object">${result.reports.map(r=>'<option value="'+safe(r.name)+'" '+((F.detailTable||result.reports[0]?.name)===r.name?'selected':'')+'>'+safe(r.name)+' · '+fmt(r.resultRows)+' filas</option>').join('')}</select>
     </label>
     <div id="fusion-detail-result">${detailHtml(result)}</div>
-    ${result.issues.length?'<details><summary>Ver primeras incidencias ('+fmt(result.issues.length)+')</summary><div class="table-wrap"><table><thead><tr><th>Severidad</th><th>BO</th><th>Origen</th><th>ID</th><th>Motivo</th></tr></thead><tbody>'+
-     result.issues.slice(0,120).map(i=>'<tr><td>'+safe(i.severity)+'</td><td><code>'+safe(i.table)+'</code></td><td>'+safe(i.source)+'</td><td>'+safe(i.id)+'</td><td>'+safe(i.message)+'</td></tr>').join('')+
-     '</tbody></table></div></details>':''}`);
+    <div id="fusion-issues">${issuesHtml(result)}</div>`);
    html+=block('4 · Elegir destino y preparar entrega',`
      <label class="block-label">¿Dónde depositar el consolidado?
       <select id="fusion-destination">
@@ -78,6 +76,58 @@
      <p class="footnote">La publicación es una operación separada. El ZIP generado no borra datos y no implica que los conflictos de unicidad del destino estén resueltos; el publicador debe validarlos contra Oracle.</p>`);
   }
   return html;
+ }
+ function issuesHtml(result){
+  const items=result.issues.filter(i=>
+   (F.issueShowResolved||!i.resolved)&&
+   (F.issueSeverity==='all'||i.severity===F.issueSeverity)&&
+   (!F.issueSearch||[i.table,i.id,i.message,i.source].some(value=>String(value).toLowerCase().includes(F.issueSearch.toLowerCase()))));
+  const size=35,pages=Math.max(1,Math.ceil(items.length/size));
+  F.issuePage=Math.min(Math.max(0,F.issuePage),pages-1);
+  const slice=items.slice(F.issuePage*size,(F.issuePage+1)*size);
+  const tables=[...new Set(result.issues.filter(i=>i.kind==='collision'&&i.source==='new').map(i=>i.table))].sort();
+  return '<div class="fusion-review">'+
+   '<h3>Conciliar incidencias · '+fmt(result.issues.length)+' detectadas</h3>'+
+   '<p class="micro">Las acciones modifican la consolidación real. Los IDs del ZIP A se mantienen protegidos. Para conflictos de referencias, selecciona el ID de un padre que exista en el resultado consolidado.</p>'+
+   '<div class="settings-grid">'+
+    '<label>Buscar BO, ID o motivo<input id="fusion-issue-search" placeholder="Buscar incidencias" value="'+safe(F.issueSearch)+'"/></label>'+
+    '<label>Tipo de incidencia<select id="fusion-issue-severity"><option value="all" '+(F.issueSeverity==='all'?'selected':'')+'>Todas</option><option value="blocking" '+(F.issueSeverity==='blocking'?'selected':'')+'>Bloqueantes</option><option value="warning" '+(F.issueSeverity==='warning'?'selected':'')+'>Advertencias</option></select></label>'+
+   '</div>'+
+   '<label class="check-inline"><input type="checkbox" id="fusion-issue-resolved" '+(F.issueShowResolved?'checked':'')+'/> Mostrar también las ya resueltas</label>'+
+   '<div class="fusion-bulk"><label>Resolver varias colisiones de un BO</label><select id="fusion-bulk-table"><option value="">Selecciona BO…</option>'+
+    tables.map(t=>'<option value="'+safe(t)+'" '+(F.bulkTable===t?'selected':'')+'>'+safe(t)+'</option>').join('')+
+   '</select><button class="btn" id="fusion-bulk-both" '+(!F.bulkTable?'disabled':'')+'>Conservar ambas versiones (reasignar IDs)</button>'+
+   '<button class="btn" id="fusion-bulk-skip" '+(!F.bulkTable?'disabled':'')+'>Omitir duplicados del ZIP B</button></div>'+
+   '<div class="footnote">'+fmt(items.length)+' incidencias filtradas · página '+(F.issuePage+1)+' de '+pages+'</div>'+
+   '<div class="table-wrap"><table><thead><tr><th>Severidad</th><th>BO / origen</th><th>ID</th><th>Motivo</th><th>Resolución</th></tr></thead><tbody>'+
+   slice.map((it,index)=>{
+    const globalIndex=F.issuePage*size+index;
+    const kind=it.kind||'row';
+    const key=it.key||window.ZPOTDualAppMerge.key('row',it.table,it.source,it.id);
+    const saved=F.decisions[key];
+    const canExclude=it.source==='new'&&it.id;
+    const choice=it.kind==='collision'?
+     '<option value="default">Sin decisión explícita (mantener ambos)</option>'+
+     '<option value="keep-both">Conservar ambos, reasignar ID del ZIP B</option>'+
+     '<option value="skip-new">Omitir registro del ZIP B</option>'+
+     '<option value="keep-old">Conservar solo los valores de ZIP A (requiere identidad)</option>'+
+     '<option value="replace-old">Actualizar desde ZIP B (requiere identidad)</option>':
+     it.kind==='reference'?
+     '<option value="default">Sin resolver</option><option value="link-parent">Asignar ID del padre existente</option>':
+     '<option value="default">Sin resolver</option>'+(canExclude?'<option value="skip-row">Omitir fila del ZIP B</option>':'');
+    const decision='<select class="fusion-choice" data-fusion-issue="'+globalIndex+'" data-fusion-key="'+safe(key)+'">'+
+     choice.replace('value="'+safe(saved?.action||'default')+'"','value="'+safe(saved?.action||'default')+'" selected')+
+     '</select>'+
+     (it.kind==='reference'?'<input class="fusion-parent-id" data-fusion-issue="'+globalIndex+'" placeholder="ID padre en '+safe(it.targetTable||'')+'" value="'+safe(saved?.targetId||'')+'"/>':'')+
+     '<button class="btn" data-fusion-apply="'+globalIndex+'">Aplicar</button>';
+    return '<tr><td>'+(it.resolved?'✓ Resuelta':safe(it.severity))+'</td><td><code>'+safe(it.table)+'</code><small> · '+safe(it.source==='old'?'ZIP A':'ZIP B')+'</small></td>'+
+     '<td>'+safe(it.id)+'</td><td>'+safe(it.message)+'</td><td><div class="fusion-actions">'+
+     (it.resolved?'<span class="micro">Decisión aplicada · </span>':'')+decision+'</div></td></tr>';
+   }).join('')+
+   '</tbody></table></div>'+
+   '<div class="actions"><button class="btn" id="fusion-issue-prev" '+(F.issuePage===0?'disabled':'')+'>Anterior</button>'+
+    '<button class="btn" id="fusion-issue-next" '+(F.issuePage>=pages-1?'disabled':'')+'>Siguiente</button></div>'+
+   '</div>';
  }
  function detailHtml(result){
   const name=F.detailTable||result.reports[0]?.name;
