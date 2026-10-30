@@ -14,11 +14,18 @@ function makeOracleIdRegistry(){
   if(!src||!target)throw Error('Se requieren ID de origen y de Oracle para registrar la relación '+table);
   let rows=data.get(table);
   if(!rows){rows=new Map();data.set(table,rows);}
+  for(const [existingSource,existingTarget] of rows)if(existingSource!==src&&existingTarget===target)
+   throw Error('Dos ID de origen pretenden usar el mismo ID Oracle '+target+' de '+table+': '+existingSource+' y '+src);
   const previous=rows.get(src);
   if(previous!==undefined&&previous!==target)throw Error('Conflicto de ID para '+table+' origen '+src+': '+previous+' frente a '+target);
   rows.set(src,target);
  };
  const get=(table:string,sourceId:unknown):string|undefined=>data.get(table)?.get(key(sourceId));
+ const ownerOf=(table:string,targetId:unknown):string|undefined=>{
+  const target=key(targetId);
+  for(const [source,oracle] of data.get(table)||[])if(oracle===target)return source;
+  return undefined;
+ };
  const load=(snapshot:unknown):number=>{
   if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw Error('Mapa de IDs inválido.');
   const entries:Array<[string,string,string]>=[];
@@ -59,7 +66,7 @@ function makeOracleIdRegistry(){
   return {row:result,replacements};
  };
  const snapshot=()=>Object.fromEntries([...data].sort(([a],[b])=>a.localeCompare(b)).map(([table,items])=>[table,Object.fromEntries([...items].sort(([a],[b])=>a.localeCompare(b)))]));
- return {put,get,load,rewrite,snapshot};
+ return {put,get,ownerOf,load,rewrite,snapshot};
 }
 /** Sort parent rows before children for self-referential relations within one BO. */
 function sortRowsBySelfReferences<T extends Record<string,unknown>>(
