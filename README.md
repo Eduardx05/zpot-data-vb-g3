@@ -85,3 +85,20 @@ En **Publicar en Oracle → Plan de carga por relaciones**, ZPOT calcula un orde
 - El **orden de publicación** proviene de las llaves foráneas del modelo, NO de `orderPos`, que controla el flujo dinámico de negocio.
 
 Este procedimiento está diseñado para **un ambiente de desarrollo aislado**. Un GET exitoso no concede permiso POST/PATCH: el servidor Oracle debe autorizar cada operación. No existe transacción ni rollback global.
+
+## Publicación por ID y diagrama de dependencias
+
+En **Publicar en Oracle** marca el objeto hijo deseado: ZPOT selecciona sus Business Objects padre disponibles, y el diagrama **padre → hijo** permite navegar por las dependencias y consultar el nombre exacto de cada campo FK.
+
+El modo predeterminado **Automático por ID** hace:
+1. GET del objeto por su `id` original; **200** → PATCH al mismo ID.
+2. Solo **404** → POST (creación). **403, 401, 5xx, errores de red y timeouts** detienen la carga sin crear a ciegas.
+3. Si Oracle devuelve otro ID al crear, registra la correspondencia `idOrigen → idOracle` y actualiza los FK de los objetos hijos durante **la misma sesión de carga**.
+4. Las referencias a padres no incluidos en los ZIP se comprueban contra Oracle, y las referencias faltantes detienen el envío. Los registros que se relacionan consigo mismos dentro de una tabla se ordenan padres primero.
+5. El **JSON de auditoría** incluye conteos de creados y actualizados, campos FK remapeados y las equivalencias por objeto.
+
+Los vínculos se basan exclusivamente en **IDs de relaciones declaradas en Visual Builder**; no se infieren relaciones por nombres. Conservar un ID original en el payload no garantiza que Oracle lo mantenga.
+
+**Limitación de reintentos:** el mapa de IDs generados se mantiene en memoria durante la sesión. Guarda la auditoría y verifica los registros antes de reiniciar o repetir la carga; si Oracle generó nuevos IDs, un reintento posterior basado solo en el ID original podría crear duplicados. No se realiza un rollback automático.
+
+**Importante:** para realizar cambios, el usuario técnico necesita permisos Oracle de POST/PATCH. El proxy puede rechazar escritura si `ENABLE_ORACLE_WRITES=false`, pero habilitarlo no resuelve permisos Oracle 403.
