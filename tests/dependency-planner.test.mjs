@@ -75,3 +75,46 @@ test('dependency selection handles cycles and multiple parents without looping',
  const removed=s.withoutParent(r.selected,'A',rel);
  assert.deepEqual(Array.from(removed.removed),['A','B','C']);
 });
+
+test('CSV-only exports infer Absence FK relations from exact column names',()=>{
+ const ctx={};runInNewContext(source,ctx);
+ const all=['AbsenceCatalogue','AbsenceTypeCatalogue','AbsenceLapseCatalogue','AppraisalUsed','Cases','Unrelated'];
+ const absence=ctx.ZPOTDependencyInference('AbsenceCatalogue',
+  ['id','absenceTypeCatalogue','absenceLapseCatalogue','encargado'],all);
+ assert.deepEqual(absence.map(x=>[x.field,x.target]).sort(),[
+  ['absenceLapseCatalogue','AbsenceLapseCatalogue'],
+  ['absenceTypeCatalogue','AbsenceTypeCatalogue']
+ ]);
+ const appraisal=ctx.ZPOTDependencyInference('AppraisalUsed',
+  [{name:'id',type:'number'},{name:'cases',type:'number'},{name:'gestion',type:'string'}],all);
+ assert.deepEqual(appraisal.map(x=>[x.field,x.target]),[['cases','Cases']]);
+ assert.equal(ctx.ZPOTDependencyInference('Unrelated',['customerId','foo','random'],all).length,0);
+});
+test('Absence business precedence produces Type, Lapse then Absence without inventing an FK',()=>{
+ const ctx={};runInNewContext(source,ctx);
+ const outgoing={AbsenceCatalogue:ctx.ZPOTDependencyInference('AbsenceCatalogue',
+  ['id','absenceTypeCatalogue','absenceLapseCatalogue'],['AbsenceCatalogue','AbsenceTypeCatalogue','AbsenceLapseCatalogue'])};
+ const result=ctx.ZPOTDependencyPlanner(['AbsenceCatalogue','AbsenceTypeCatalogue','AbsenceLapseCatalogue'],
+  outgoing,[{before:'AbsenceTypeCatalogue',after:'AbsenceLapseCatalogue'}]);
+ assert.deepEqual(Array.from(result.stages,stage=>Array.from(stage)),[
+  ['AbsenceTypeCatalogue'],['AbsenceLapseCatalogue'],['AbsenceCatalogue']
+ ]);
+ assert.equal(result.edges.length,2);
+ assert.equal(result.orderEdges.length,1);
+ assert.equal(result.orderEdges[0].field,'Orden de carga');
+ assert.equal(result.edges.some(x=>x.parent==='AbsenceTypeCatalogue'&&x.child==='AbsenceLapseCatalogue'),false);
+});
+test('CSV-only AppraisalUsed selection pulls in Cases and its available parent chain',()=>{
+ const ctx={};runInNewContext(source,ctx);
+ const available=['AppraisalUsed','Cases','AprobationCatalogue'];
+ const outgoing={
+  AppraisalUsed:ctx.ZPOTDependencyInference('AppraisalUsed',['id','cases'],available),
+  Cases:ctx.ZPOTDependencyInference('Cases',['id','aprobationCatalogue'],available)
+ };
+ const expanded=ctx.ZPOTDependencySelection.withParents(['AppraisalUsed'],available,outgoing);
+ assert.deepEqual(Array.from(expanded.selected),['AppraisalUsed','AprobationCatalogue','Cases']);
+ const planResult=ctx.ZPOTDependencyPlanner(expanded.selected,outgoing);
+ assert.deepEqual(Array.from(planResult.stages,stage=>Array.from(stage)),[
+  ['AprobationCatalogue'],['Cases'],['AppraisalUsed']
+ ]);
+});
