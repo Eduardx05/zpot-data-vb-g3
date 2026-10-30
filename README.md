@@ -162,3 +162,19 @@ En **Publicar en Oracle**, el interruptor **«Ante errores de fila, omitir y con
 - La finalización con omisiones indica `completed-with-omissions` (no éxito completo). Descarga la auditoría con `skippedRecords` e `idMappings` antes de repetir la carga.
 
 Desactiva el interruptor si deseas el comportamiento estricto de detener ante la primera fila conflictiva. Esta opción no elimina ni altera datos existentes y no ejecuta `rollback`.
+
+
+## Fusión de aplicaciones Oracle (página nueva e independiente)
+
+En la navegación de ZPOT, abre **Fusionar aplicaciones Oracle**. Esta funcionalidad **no sustituye ni altera** el consolidador CSV ni el publicador existente.
+
+1. Usa **＋ Cargar uno o dos ZIP adicionales** si las exportaciones no aparecen todavía; elige explícitamente el **ZIP antiguo** (fuente prioritaria de catálogos) y el **ZIP nuevo** (casos y cambios recientes).
+2. Pulsa **Analizar y generar vista previa**. El procesamiento se efectúa localmente en el navegador, sin enviar los CSV al repositorio ni a Oracle. Puedes revisar por BO cantidad antigua, nueva, final, nuevas filas, coincidencias, conflictos e IDs reasignados. La prueba incluye 14.000 registros de `Cases` y no impone un límite artificial de 10.000 filas del ZIP.
+3. Descarga la **auditoría JSON**. Incluye `idMappings.old` e `idMappings.new` por BO, reglas de prioridad, conflictos, referencias no resueltas y métricas. Los ZIP originales permanecen intactos.
+4. Selecciona el **destino**: descargar ZIP plano para revisión/Data Manager, o preparar el ZIP en el **publicador API de OIC Desarrollo** ya existente. En el segundo caso la herramienta solo hace el traspaso local y abre la página de publicación. Antes de cualquier escritura deberás confirmar el destino, comprobar GET y autorizar explícitamente la operación.
+
+**Reglas iniciales conservadoras.** Los catálogos mantienen los valores existentes de la versión antigua y añaden los nuevos. `Cases` solo se identifica entre fuentes por un `opportunityNumber` no vacío y verificable; igualdad de `id` entre dos aplicaciones **no acredita** el mismo expediente. `Configuration` identifica claves mediante `keyCatalog` o `key`; solo prefiere cambios nuevos cuando `lastUpdateDate` es estrictamente posterior. Los BO de operación/historial preservan las filas de ambas fuentes. Cuando dos registros distintos tienen el mismo ID, se asigna un ID diferente al entrante y se reescriben las FK declaradas del modelo maestro. Un valor `unique:true` que es FK (por ejemplo `cases`) **no se usa** como identidad entre aplicaciones, ya que su ID no pertenece a un espacio global.
+
+**Seguridad de la consolidación.** Los conflictos ambiguos, IDs de origen duplicados y FK no resueltas se informan; el ZIP puede descargarse como **diagnóstico**, con nombre `NO_PUBLICAR`, pero el traspaso al publicador se deshabilita mientras existan errores bloqueantes. Antes de importar el ZIP mediante Data Manager hay que verificar la semántica de reemplazo de Oracle; el ZIP de diagnóstico no se debe importar. Incluso con cero conflictos internos, es necesario comprobar la identidad de los registros del **destino real** para evitar sobrescribir BO que tengan IDs coincidentes. El nuevo módulo **no efectúa escrituras directas** ni modifica las protecciones del publicador original.
+
+**Límites explícitos.** Sin una clave de negocio estable, dos registros modificados de fuentes distintas pueden quedar conservados como filas separadas y requerir conciliación manual. El módulo no intenta identificar expedientes por nombre de personas ni por coincidencias aproximadas. La prioridad se aplica sobre valores, pero las diferencias de estructura y los campos que el destino no admita deben revisarse antes de publicar.
