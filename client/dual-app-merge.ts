@@ -45,7 +45,9 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
   // columns are NOT assumed to be globally unique across app versions.
   if(table==='Cases')return ['opportunityNumber','OPPORTUNITYNUMBER'].find(x=>columns.includes(x));
   if(table==='Configuration')return ['keyCatalog','key'].find(x=>columns.includes(x));
-  return (input.uniqueKeys?.[table]||[]).map(x=>x.name).find(x=>columns.includes(x));
+  return (input.uniqueKeys?.[table]||[]).map(x=>x.name).find(x=>columns.includes(x)&&
+    // Numeric FK IDs are scoped to each app, not shared business identities.
+    !(input.relations?.[table]||[]).some(rel=>rel.field===x));
  };
  const equivalent=(a:FusionRow,b:FusionRow,columns:string[])=>columns.every(k=>
   ['creationDate','lastUpdateDate','createdBy','lastUpdatedBy','abcsChangeNumber'].includes(k)||clean(a[k])===clean(b[k]));
@@ -114,7 +116,8 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
     else if(candidate)match=candidate;
    }
    const bySameId=byId.get(sourceId);
-   if(!match&&bySameId&&equivalent(row,bySameId.row,columns))match=bySameId;
+   if(!match&&bySameId&&!(input.relations?.[table]||[]).length&&equivalent(row,bySameId.row,columns))
+    match=bySameId;
    if(match){
     const target=match.row.id;
     remember('new',sourceId,target);stat.matched++;
@@ -141,7 +144,11 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
    // Different business identity and overlapping PK: never overwrite.
    const collides=used.has(sourceId);
    const target=collides?allocated():sourceId;
-   if(collides)stat.collisions++;
+   if(collides){
+    stat.collisions++;
+    // This is intentionally NOT a merge: the apps can reuse primary keys.
+    issue('warning',table,'new',sourceId,'ID repetido entre aplicaciones sin identidad de negocio verificada; se reasignó a '+target+'.');
+   }
    put(row,'new',sourceId,target);stat.added++;
   }
   stat.resultRows=items.length;
@@ -156,6 +163,11 @@ function fuseBusinessObjectZips(input:FusionInput):FusionResult{
    const original=clean(item.row[rel.field]);if(!original||original==='0')continue;
    // Some Visual Builder relationship descriptors refer to textual fields.
    // Rewrite only ID-like values; leave text unmodified but report it.
+   if(['approvalTypeName','legalDocumentName','macroProcessName'].includes(rel.field)){
+    // The original model has name-based (not numeric FK ID) references here.
+    // They must remain strings. Name changes are not inferred as IDs.
+    continue;
+   }
    if(!validId(original)){issue('warning',table,item.origin,clean(item.row.id),
      'Referencia de texto '+rel.field+' sin resolución automática.');continue;}
    const origin=item.fieldOrigins[rel.field]||item.origin;
