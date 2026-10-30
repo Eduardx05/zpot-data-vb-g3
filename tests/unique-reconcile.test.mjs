@@ -109,3 +109,11 @@ test('400 uniqueness violation can be reconciled after concurrent insert without
  assert.equal(out.targetId,'7');
  assert.equal(created,1);assert.equal(updates,1);
 });
+
+test('publisher refuses to PATCH an Oracle ID already reconciled with another source ID',()=>{
+ const html=readFileSync('public/index.template.html','utf8');
+ assert.match(html,/onTarget:target=>\{/);
+ assert.match(html,/const owner=session\.idMap\.ownerOf\(t,target\)/);
+ assert.match(html,/if\(owner&&owner!==sourceId\)throw Error\('Colisión de IDs/);
+ assert.match(html,/parsed\?\.\['o:errorDetails'\]/);
+});
