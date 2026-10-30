@@ -95,7 +95,7 @@ const PUB_DEV_PATH='/ic/builder/rt/BNCR_CREDIT_APPROVAL_2026_GEN3_V2/live/resour
 const PUB_DEV_URL='https://'+PUB_DEV_HOST+PUB_DEV_PATH+'/';
 const PUB = {
   url:PUB_DEV_URL, auth:'public', testObject:'Configuration', mode:'sync', preserveIds:true, tableSet:new Set(['AbsenceCatalogue']), limit:'1',
-  testPassed:false, busy:false, stop:false, includeEmpty:false, approved:false,
+  testPassed:false, busy:false, stop:false, includeEmpty:false, approved:false, skipConflicts:true,
   results:null, testedUrl:'', verifiedTable:'', csrfHint:'',
   maxErrors:10, sleepMs:120, stepMode:true, stageSession:null, focusObject:'ALL', mapScope:'selected', restoredMappings:null, restoredCount:0, restoredVersion:0, restoredFrom:''
 };
@@ -255,7 +255,7 @@ function pubFullMasterPlan(){
  const names=Object.keys(model.objects);
  return window.ZPOTDependencyPlanner(names,pubRelationships(names),PUB_IMPORT_ORDER_RULES);
 }
-function pubRunSignature(){return JSON.stringify({tables:pubSelectedTables(),sources:[...consolidation].sort((a,b)=>a-b).map(i=>D[i]?.sha),schema:conSchema,schemaMode,includeMode,limit:PUB.limit,mode:PUB.mode,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,url:PUB.url,mappingVersion:PUB.restoredVersion});}
+function pubRunSignature(){return JSON.stringify({tables:pubSelectedTables(),sources:[...consolidation].sort((a,b)=>a-b).map(i=>D[i]?.sha),schema:conSchema,schemaMode,includeMode,limit:PUB.limit,mode:PUB.mode,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,url:PUB.url,mappingVersion:PUB.restoredVersion});}
 function pubRelationDiagram(plan){
  const focus=PUB.focusObject||'ALL';
  const known=new Set(plan.stages.flat());
@@ -318,11 +318,11 @@ function renderPublish(){
  block('2 · Selecciona los Business Objects que vas a enviar',`<div class="notice"><strong>Selección por dependencias activa.</strong> Al marcar un objeto se seleccionan automáticamente todos sus objetos padre disponibles, incluso a varios niveles. Al desmarcar un padre se propondrá retirar también los hijos seleccionados que dependan de él. Los padres que no existan en los ZIP seguirán indicados como referencias externas para verificarse antes del envío.</div><div class="actions"><button class="btn btn-primary" id="pub-select-all" ${PUB.busy?'disabled':''}>Seleccionar todos (${names.length})</button><button class="btn" id="pub-recalculate" ${PUB.busy?'disabled':''}>Recalcular todo el plan</button><button class="btn" id="pub-clear" ${PUB.busy?'disabled':''}>Desmarcar todos</button><button class="btn" id="pub-catalogs" ${PUB.busy?'disabled':''}>Seleccionar solo catálogos (revisar)</button><button class="btn" id="pub-from-consolidator">Actualizar lista desde Consolidador</button><button class="btn btn-primary" id="pub-use-active">Usar solo ZIP activo</button><button class="btn" id="pub-remove-demo">Quitar fuentes DEMO</button></div><div class="notice ${[...consolidation].some(i=>D[i]?.isDemo)?'danger':''}"><strong>Fuentes incluidas en esta publicación:</strong> ${[...consolidation].some(i=>D[i]?.isDemo)?'Hay fuentes DEMO seleccionadas: debes quitarlas antes de publicar.':'Solo se enviarán las fuentes marcadas abajo.'}</div><div class="pub-object-grid">${D.map((d,i)=>`<label class="source-line"><input type="checkbox" data-pub-source="${i}" ${consolidation.has(i)?'checked':''} ${PUB.busy?'disabled':''}/><span><strong>${esc(trunc(nominal(d),64))}</strong><small>${d.isDemo?'DEMO · NO PUBLICAR':'ZIP disponible'} · ${fmt(stats(d).totalRows)} filas · ${esc(d.filename)}</small></span></label>`).join('')}</div><p class="micro">Fuentes del Consolidador: <strong>${[...consolidation].map(i=>esc(trunc(nominal(D[i]),55))).join(', ')||'Ninguna'}</strong>. La deduplicación usa <code>id</code>, <code>lastUpdateDate</code> y prioridad, respetando el esquema seleccionado allí.</p><div class="pub-object-grid">${names.map(t=>`<label class="source-line"><input type="checkbox" data-pub-table="${esc(t)}" ${PUB.tableSet.has(t)?'checked':''} ${PUB.busy?'disabled':''}/><span><strong>${esc(t)}</strong><small>${fmt([...consolidation].reduce((v,i)=>v+(D[i].tables?.[t]?.count||0),0))} filas de origen · ${esc(KNOWN[t]?.category||'Sin categoría')}</small></span></label>`).join('')}</div><div id="pub-selected-count" class="notice">${esc(pubRowPreview())}</div>`)+
  block('3 · Plan de carga por relaciones y dependencias',pubPlanMarkup(selectedPlan))+
  block('Mapa visual · Dependencias entre objetos',pubRelationDiagram(PUB.mapScope==='master'?pubFullMasterPlan():selectedPlan))+
- block('3 · Límites y compatibilidad de datos',`<div class="settings-grid"><label>Máximo de registros por objeto en esta ejecución<select id="pub-limit">${[['1','1 (prueba mínima)'],['5','5 (prueba inicial recomendada)'],['25','25'],['100','100'],['500','500'],['1000','1000'],['ALL','TODOS (requiere confirmación reforzada)']].map(([x,lab])=>`<option value="${x}" ${PUB.limit===x?'selected':''}>${lab}</option>`).join('')}</select></label><label>Intervalo entre llamadas (ms)<input type="number" id="pub-delay" min="0" max="5000" value="${PUB.sleepMs}"/></label></div><div class="pub-flags"><label class="check-inline"><input id="pub-id" type="checkbox" ${PUB.preserveIds?'checked':''}/> Intentar conservar <code>id</code> original (requiere que el API lo permita)</label><label class="check-inline"><input id="pub-empty" type="checkbox" ${PUB.includeEmpty?'checked':''}/> Enviar campos vacíos como <code>null</code> (puede borrar valores con PATCH)</label></div><div class="actions"><button class="btn" id="pub-map-import" ${PUB.busy?'disabled':''}>Importar equivalencias de IDs (auditoría JSON)</button><button class="btn" id="pub-map-clear" ${PUB.restoredCount?'':'disabled'}>Limpiar equivalencias importadas</button><input type="file" id="pub-map-file" accept=".json,application/json" hidden/></div><div class="notice"><strong>Control de ID origen → ID Oracle:</strong> ${PUB.restoredCount?PUB.restoredCount+' equivalencias importadas de '+esc(PUB.restoredFrom):'Sin equivalencias importadas. Si Oracle generó IDs nuevos en una migración anterior, carga aquí su auditoría JSON para evitar duplicados.'} El mapa solo se conserva en esta sesión del navegador y debe corresponder al mismo endpoint.</div><p class="micro"><strong>Asociación automática por ID:</strong> el publicador consulta cada ID original, actualiza si existe y crea si Oracle confirma 404. Cuando Oracle asigna un ID nuevo, el mapa de equivalencias se utiliza para las referencias de los objetos hijos en la misma sesión. <strong>Guarda el reporte de auditoría antes de recargar:</strong> una ejecución nueva no podrá deducir automáticamente los IDs asignados en una ejecución anterior. Nunca se relacionan registros por nombre.</p><p class="micro">Se omiten los campos de auditoría (<code>creationDate</code>, <code>lastUpdateDate</code>, etc.). Se convierten los tipos booleanos y numéricos. <strong>Si Oracle genera nuevos IDs, las referencias entre objetos no se reasignan automáticamente:</strong> validar relaciones antes de cargas de múltiples tablas.</p><div class="actions"><button class="btn" id="pub-preview">Preparar vista previa sin enviar datos</button><button class="btn" id="pub-json-preview">Descargar vista previa JSON (primer objeto)</button></div><div id="pub-preview-result" class="pub-preview-placeholder">Primero elige objetos, después prepara la vista previa.</div>`)+
+ block('3 · Límites y compatibilidad de datos',`<div class="settings-grid"><label>Máximo de registros por objeto en esta ejecución<select id="pub-limit">${[['1','1 (prueba mínima)'],['5','5 (prueba inicial recomendada)'],['25','25'],['100','100'],['500','500'],['1000','1000'],['ALL','TODOS (requiere confirmación reforzada)']].map(([x,lab])=>`<option value="${x}" ${PUB.limit===x?'selected':''}>${lab}</option>`).join('')}</select></label><label>Intervalo entre llamadas (ms)<input type="number" id="pub-delay" min="0" max="5000" value="${PUB.sleepMs}"/></label></div><div class="pub-flags"><label class="check-inline"><input id="pub-id" type="checkbox" ${PUB.preserveIds?'checked':''}/> Intentar conservar <code>id</code> original (requiere que el API lo permita)</label><label class="check-inline"><input id="pub-empty" type="checkbox" ${PUB.includeEmpty?'checked':''}/> Enviar campos vacíos como <code>null</code> (puede borrar valores con PATCH)</label><label class="check-inline"><input id="pub-skip-conflicts" type="checkbox" ${PUB.skipConflicts?'checked':''}/> Ante errores de fila (unicidad, validación, relación faltante), omitir y continuar con las independientes; usar ID del registro Oracle cuando se pueda conciliar con seguridad.</label></div><div class="actions"><button class="btn" id="pub-map-import" ${PUB.busy?'disabled':''}>Importar equivalencias de IDs (auditoría JSON)</button><button class="btn" id="pub-map-clear" ${PUB.restoredCount?'':'disabled'}>Limpiar equivalencias importadas</button><input type="file" id="pub-map-file" accept=".json,application/json" hidden/></div><div class="notice"><strong>Control de ID origen → ID Oracle:</strong> ${PUB.restoredCount?PUB.restoredCount+' equivalencias importadas de '+esc(PUB.restoredFrom):'Sin equivalencias importadas. Si Oracle generó IDs nuevos en una migración anterior, carga aquí su auditoría JSON para evitar duplicados.'} El mapa solo se conserva en esta sesión del navegador y debe corresponder al mismo endpoint.</div><p class="micro"><strong>Asociación automática por ID:</strong> el publicador consulta cada ID original, actualiza si existe y crea si Oracle confirma 404. Cuando Oracle asigna un ID nuevo, el mapa de equivalencias se utiliza para las referencias de los objetos hijos en la misma sesión. <strong>Guarda el reporte de auditoría antes de recargar:</strong> una ejecución nueva no podrá deducir automáticamente los IDs asignados en una ejecución anterior. Nunca se relacionan registros por nombre.</p><p class="micro">Se omiten los campos de auditoría (<code>creationDate</code>, <code>lastUpdateDate</code>, etc.). Se convierten los tipos booleanos y numéricos. <strong>Si Oracle genera nuevos IDs, las referencias entre objetos no se reasignan automáticamente:</strong> validar relaciones antes de cargas de múltiples tablas.</p><div class="actions"><button class="btn" id="pub-preview">Preparar vista previa sin enviar datos</button><button class="btn" id="pub-json-preview">Descargar vista previa JSON (primer objeto)</button></div><div id="pub-preview-result" class="pub-preview-placeholder">Primero elige objetos, después prepara la vista previa.</div>`)+
  block('4 · Autorizar publicación y auditar',`<div class="notice danger"><strong>Solo publicación de pruebas del servidor OIC Desarrollo.</strong> No publiques este HTML en un sitio público: incluye datos precargados del BNCR. <strong>Configuration:</strong> esta prueba autoriza incluir todos sus registros, incluso claves con URL_APP, servidores o parámetros de otros ambientes. Se avisará la cantidad antes de enviar y quedará constancia en la auditoría. Verifica las configuraciones del destino después de la migración. El modo POST no verifica automáticamente si el registro ya existe en el destino. Confirma respaldo y que esta publicación de OIC Desarrollo no contiene datos productivos. No existe transacción única ni rollback automático: una falla podría dejar una carga parcial.</div><label class="check-inline" style="max-width:none"><input id="pub-ack" type="checkbox" ${PUB.approved?'checked':''}/> Confirmo que este LIVE pertenece a OIC Desarrollo (NO producción del banco), tengo respaldo, permisos y esquema revisados; acepto el riesgo de carga parcial y duplicados.</label><label class="block-label">Escribe <code>CARGAR DESARROLLO</code> para activar el envío<input id="pub-confirm-phrase" autocomplete="off" spellcheck="false" placeholder="CARGAR DESARROLLO"/></label><div class="actions"><button class="btn btn-primary" id="pub-send" ${PUB.busy?'disabled':''}>Enviar registros seleccionados por API</button><button class="btn" id="pub-stop" ${PUB.busy?'':'disabled'}>Detener tras solicitud actual</button><button class="btn" id="pub-report" ${PUB.results?'':'disabled'}>Descargar reporte JSON</button><button class="btn" id="pub-reset">Restablecer plan (sin rollback)</button></div><div class="progress"><div id="pub-progress" class="progress-fill" style="width:0%"></div></div><div id="pub-status" class="notice">No se han enviado datos desde esta sesión.</div><div id="pub-log" class="pub-log" aria-live="polite">${PUB.results?esc(JSON.stringify({total:PUB.results.total,success:PUB.results.success,skipped:PUB.results.skipped,failed:PUB.results.failed},null,2)):'La publicación se registrará aquí.'}</div>`)+
  `<p class="footnote">Se requiere HTTPS, autorización y permisos de escritura en los Business Objects. Las solicitudes se envían secuencialmente al proxy local Node.js; éste se autentica con Oracle mediante Public o Bearer configurado en .env. No se almacenan contraseñas ni tokens en el HTML o JSON.</p>`;
 }
-function pubFromInputs(){let u=$('pub-url');if(u&&u.value!==PUB.url){PUB.url=u.value.trim();PUB.testPassed=false}let a=$('pub-auth');if(a&&a.value!==PUB.auth){PUB.auth=a.value;PUB.testPassed=false}let t=$('pub-test-object');if(t&&t.value.trim()!==PUB.testObject){PUB.testObject=t.value.trim();PUB.testPassed=false}if($('pub-mode'))PUB.mode=$('pub-mode').value;if($('pub-limit'))PUB.limit=$('pub-limit').value;if($('pub-delay'))PUB.sleepMs=Math.min(5000,Math.max(0,Number($('pub-delay').value)||0));PUB.preserveIds=!!$('pub-id')?.checked;PUB.includeEmpty=!!$('pub-empty')?.checked;PUB.approved=!!$('pub-ack')?.checked;}
+function pubFromInputs(){let u=$('pub-url');if(u&&u.value!==PUB.url){PUB.url=u.value.trim();PUB.testPassed=false}let a=$('pub-auth');if(a&&a.value!==PUB.auth){PUB.auth=a.value;PUB.testPassed=false}let t=$('pub-test-object');if(t&&t.value.trim()!==PUB.testObject){PUB.testObject=t.value.trim();PUB.testPassed=false}if($('pub-mode'))PUB.mode=$('pub-mode').value;if($('pub-limit'))PUB.limit=$('pub-limit').value;if($('pub-delay'))PUB.sleepMs=Math.min(5000,Math.max(0,Number($('pub-delay').value)||0));PUB.preserveIds=!!$('pub-id')?.checked;PUB.includeEmpty=!!$('pub-empty')?.checked;PUB.skipConflicts=!!$('pub-skip-conflicts')?.checked;PUB.approved=!!$('pub-ack')?.checked;}
 function pubUpdateCount(){let e=$('pub-selected-count');if(e)e.textContent=pubRowPreview();}
 function pubIdentity(headers,record){return record.id?`ID:${record.id}`:'ROW:'+JSON.stringify(headers.map(x=>record[x]||''));}
 async function pubConsolidated(t){
@@ -395,43 +395,65 @@ async function pubPreview(downloadOnly=false){pubFromInputs();try{
  }catch(e){pubSetStatus('Error al preparar vista previa: '+e.message,'danger')}}
 // Each stage is dependency-first and requires its own acknowledgement in step mode.
 // Never automatically replay a POST after an interrupted or failed stage.
-async function pubCheckReferences(pack, session, base) {
- const done=session.successfulIds;
- const plan=session.plan;
- const required=new Map();
+function pubSkipError(message,metadata={}){
+ const error=new Error(message);
+ error.skipRecord=true;
+ Object.assign(error,metadata);
+ return error;
+}
+// Verify each row just before writing, rather than blocking an entire stage.
+// A skipped parent can NEVER silently resolve to an unrelated Oracle ID.
+async function pubCheckRowReferences(pack,row,session,base){
  const outgoing=pubRelationships([pack.table])[pack.table]||[];
- const checks=new Set();
- const currentIds=new Set(pack.rows.map(r=>String(r.id??'').trim()).filter(Boolean));
- for(const row of pack.rows) for(const rel of outgoing){
-   if(!rel?.field||!rel?.target)continue;
-   const value=String(row[rel.field]??'').trim();
-   if(!value||value==='0'||value.toLowerCase()==='null')continue;
-   const parent=rel.target,reference=parent+'/'+value;
-   if(required.has(reference))continue;
-   required.set(reference,{parent,id:value,field:rel.field});
-   if(parent===pack.table&&currentIds.has(value)){
-     // Rows were topologically ordered before this stage. The parent will be
-     // inserted first in the same BO, so do not GET it before the stage starts.
-     const parentIndex=pack.rows.findIndex(x=>String(x.id??'').trim()===value);
-     const childIndex=pack.rows.indexOf(row);
-     if(parentIndex>=childIndex)throw Error('Dependencia interna no ordenada: '+pack.table+' ID '+value+' debe cargarse antes del hijo.');
-     continue;
-   }
-   if(done.get(parent)?.has(value))continue;
-   const planned=session.packs.get(parent);
-   if(planned && planned.rows.some(r=>String(r.id??'').trim()===value)){
-     throw Error(`Dependencia pendiente: ${pack.table}.${rel.field}=${value} referencia ${parent}, cuyo registro aún no se publicó correctamente.`);
-   }
-   checks.add(reference);
+ const done=session.successfulIds;
+ const omitted=session.skippedIds;
+ if(!session.checkedReferences)session.checkedReferences=new Set();
+ let checked=0;
+ for(const rel of outgoing){
+  if(!rel?.field||!rel?.target)continue;
+  const id=String(row[rel.field]??'').trim();
+  if(!id||id==='0'||id.toLowerCase()==='null')continue;
+  const parent=rel.target,sourceKey=parent+'/'+id;
+  if(omitted.get(parent)?.has(id))
+   throw pubSkipError('Padre omitido: '+parent+' ID origen '+id+' ('+pack.table+'.'+rel.field+'). Se omite el hijo para evitar referencias erróneas.',{parent,field:rel.field,parentId:id});
+  if(done.get(parent)?.has(id))continue;
+  const planned=session.packs.get(parent);
+  if(planned?.rows.some(x=>String(x.id??'').trim()===id))
+   throw pubSkipError('Padre todavía no publicado: '+parent+' ID '+id+' requerido por '+pack.table+'.'+rel.field+'. Se omite el hijo.',{parent,field:rel.field,parentId:id});
+  const remoteId=session.idMap.get(parent,id)||id;
+  const checkKey=parent+'/'+remoteId;
+  if(session.checkedReferences.has(checkKey))continue;
+  if(session.checkedReferences.size>=10000)
+   throw Error('Se alcanzó el límite de 10000 verificaciones de referencias remotas. Detén la carga y revisa el plan.');
+  try {
+   await pubFetch(pubEndpoint(base,parent,remoteId),{headers:{Accept:'application/json'}});
+   session.checkedReferences.add(checkKey);
+   checked++;
+  }catch(error){
+   if(error.status===404)
+    throw pubSkipError('No existe padre Oracle '+parent+' ID '+remoteId+' (origen '+id+') para '+pack.table+'.'+rel.field+'. Se omite el hijo.',{status:404,parent,field:rel.field,parentId:id});
+   throw Error('No fue posible validar la referencia '+pack.table+'.'+rel.field+' → '+parent+' ID '+remoteId+': '+error.message);
+  }
  }
- if(checks.size>250)throw Error(`La etapa requiere verificar ${checks.size} referencias no cargadas en este plan. Máximo seguro: 250 GET por etapa. Incluye las tablas padre o divide la carga.`);
- for(const reference of checks){
-   if(PUB.stop)throw Error('Se detuvo la verificación de relaciones.');
-   const item=required.get(reference);
-   try{await pubFetch(pubEndpoint(base,item.parent,session.idMap.get(item.parent,item.id)||item.id),{headers:{Accept:'application/json'}});}
-   catch(e){throw Error(`Referencia no encontrada o sin permiso GET: ${pack.table}.${item.field} → ${item.parent} ID ${item.id}. ${e.message}`);}
- }
- return {references:required.size,validatedRemote:checks.size};
+ return {validatedRemote:checked};
+}
+function pubIssueDetails(table,row,error,stage){
+ const message=String(error?.message||error).slice(0,1500);
+ const oracleDetail=String(error?.oracleDetail||'').slice(0,1000);
+ const field=String(error?.field||/Non-unique values found for\\s+([A-Za-z][A-Za-z0-9_]*)/i.exec(oracleDetail||message)?.[1]||'');
+ const sensitive=/TOKEN|PASSWORD|PASS|SECRET|CREDENTIAL|AUTH|CERTIFICATE|PRIVATE|KEY/i.test(field)&&field!=='keyCatalog';
+ const raw=field?row?.[field]:undefined;
+ const fieldValue=raw===null||raw===undefined?'':sensitive?'[oculto]':String(raw).slice(0,120);
+ return {stage,object:table,id:String(row?.id??'SIN_ID'),status:error?.status||null,
+  oracleType:String(error?.oracleType||''),field,fieldValue,oracleDetail,message,
+  parent:error?.parent||null,parentId:error?.parentId||null,
+  action:'omitido; revisar auditoría antes de repetir la carga'};
+}
+function pubCanSkipIssue(error){
+ if(error?.skipRecord===true)return true;
+ // Oracle's row-level validation, uniqueness and missing-record failures can
+ // be omitted; authentication, server faults and ambiguous writes stop the job.
+ return [400,404,409,422].includes(error?.status);
 }
 async function pubSend(){
  if(PUB.busy)return;
@@ -476,8 +498,8 @@ async function pubSend(){
        // IMPORTANT: configurationPack.rows stays unchanged; all rows are eligible.
        pubLog('Configuration: '+configurationReview.total+' registros preparados, '+configurationReview.flaggedCount+' parámetros de ambiente identificados (solo advertencia).');
      }
-     const report={format:'BNCR-ZPOT-Oracle-BO-API-v3',startedAt:new Date().toISOString(),url:base,mode:PUB.mode,preserveIds:PUB.preserveIds,environment:'OIC Desarrollo / aplicación publicada live',sources:[...consolidation].map(i=>({name:nominal(D[i]),filename:D[i].filename})),plan:{stages:plan.stages,edges:plan.edges,external:plan.external,selfReferences:plan.selfReferences},total:[...packs.values()].reduce((n,p)=>n+p.rows.length,0),success:0,created:0,updated:0,skipped:0,failed:0,stopped:false,stages:[],tables:[],operations:[],operationsTruncated:false,errors:[],idMappings:{},configurationReview};
-     session={signature,plan,packs,report,nextStage:0,failed:false,successfulIds:new Map(),idMap:window.ZPOTOracleIdTools.createRegistry()};
+     const report={format:'BNCR-ZPOT-Oracle-BO-API-v3',startedAt:new Date().toISOString(),url:base,mode:PUB.mode,preserveIds:PUB.preserveIds,environment:'OIC Desarrollo / aplicación publicada live',sources:[...consolidation].map(i=>({name:nominal(D[i]),filename:D[i].filename})),plan:{stages:plan.stages,edges:plan.edges,external:plan.external,selfReferences:plan.selfReferences},total:[...packs.values()].reduce((n,p)=>n+p.rows.length,0),success:0,created:0,updated:0,skipped:0,failed:0,stopped:false,stages:[],tables:[],operations:[],operationsTruncated:false,errors:[],skippedRecords:[],skippedTruncated:false,idMappings:{},configurationReview,skipConflicts:PUB.skipConflicts};
+     session={signature,plan,packs,report,nextStage:0,failed:false,successfulIds:new Map(),skippedIds:new Map(),checkedReferences:new Set(),idMap:window.ZPOTOracleIdTools.createRegistry()};
      if(PUB.restoredMappings){session.idMap.load(PUB.restoredMappings);report.restoredMappings=PUB.restoredCount;}
      PUB.stageSession=session;PUB.results=report;
    }
@@ -495,8 +517,7 @@ async function pubSend(){
      for(const t of tablesAtStage){
        if(PUB.stop)throw Error('Detenido por el usuario durante la validación.');
        await pubFetch(pubEndpoint(base,t)+'?limit=1',{headers:{Accept:'application/json'}});
-       const refs=await pubCheckReferences(session.packs.get(t),session,base);
-       stageReport.remoteReferencesChecked+=refs.validatedRemote;
+       // FK validation is per row so a single missing parent only omits its own descendants.
      }
      stageReport.status='sending';
      for(const t of tablesAtStage){
@@ -508,7 +529,10 @@ async function pubSend(){
          if(PUB.stop)throw Error('Publicación detenida por el usuario.');
          const id=r.id;
          if(PUB.mode!=='create'&&!id){tab.skipped++;report.skipped++;stageReport.skipped++;pubLog('Omitido '+t+': fila sin ID');continue;}
+         let wroteToOracle=false;
          try{
+           const references=await pubCheckRowReferences(pack,r,session,base);
+           stageReport.remoteReferencesChecked+=references.validatedRemote;
            const sourceId=String(id??'').trim();
            const sourcePayload=pubPayload(t,r,pack.cols);
            const refs=pubRelationships([t])[t]||[];
@@ -564,6 +588,7 @@ async function pubSend(){
              result=await pubFetch(route,opts);
              operation=PUB.mode==='update'?'updated':'created';
            }
+           wroteToOracle=true;
            let oracleId=result.json?.id??result.headers?.get('x-zpot-oracle-id');
            if(operation==='updated'&&oracleId!==undefined&&oracleId!==null&&String(oracleId)!==String(targetId))
              throw Error('Oracle devolvió un ID diferente al actualizado: '+String(targetId)+' → '+String(oracleId));
@@ -587,10 +612,20 @@ async function pubSend(){
            pubLog('✓ '+t+' ID '+sourceId+' → Oracle '+String(oracleId??'sin ID')+' · '+(operation==='updated'?'actualizado':'creado')+(mapped.replacements.length?' · '+mapped.replacements.length+' relación(es) reasociadas':''));
 
          }catch(e){
+           const issue=pubIssueDetails(t,r,e,stageIndex+1);
+           if(PUB.skipConflicts&&!wroteToOracle&&pubCanSkipIssue(e)){
+             tab.skipped++;report.skipped++;stageReport.skipped++;
+             if(!session.skippedIds.has(t))session.skippedIds.set(t,new Set());
+             if(id!==null&&id!==undefined&&String(id).trim())session.skippedIds.get(t).add(String(id).trim());
+             if(report.skippedRecords.length<10000)report.skippedRecords.push(issue);
+             else report.skippedTruncated=true;
+             pubLog('⚠ Omitido '+t+' origen ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+(issue.field?'campo '+issue.field+(issue.fieldValue?'='+issue.fieldValue:'')+' | ':'')+issue.message+'. Dependientes con ese ID también serán omitidos.');
+             continue;
+           }
            tab.failed++;report.failed++;stageReport.failed++;session.failed=true;
-           if(report.errors.length<250)report.errors.push({stage:stageIndex+1,object:t,id:String(id??'SIN_ID'),message:e.message});
-           pubLog(`Error ${t} ID ${String(id??'SIN_ID')}: ${e.message}`);
-           throw Error(`Fallo en ${t} (ID ${String(id??'SIN_ID')}); se detuvo antes de cargar los objetos dependientes. ${e.message}`);
+           if(report.errors.length<250)report.errors.push(issue);
+           pubLog('✖ Error crítico '+t+' ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+issue.message);
+           throw Error('Fallo crítico en '+t+' (ID '+issue.id+'); se detuvo la carga para evitar corrupción de datos. '+issue.message);
          }
          const processed=report.success+report.failed+report.skipped;
          const bar=$('pub-progress');if(bar)bar.style.width=(100*processed/Math.max(1,report.total)).toFixed(1)+'%';
@@ -606,7 +641,7 @@ async function pubSend(){
    if(completed)report.finishedAt=new Date().toISOString();
    report.idMappings=session.idMap.snapshot();
    PUB.results=report;
-   pubSetStatus(completed?`Todas las etapas terminadas: ${fmt(report.success)} registros enviados, ${fmt(report.failed)} fallidos.`:`Etapa ${session.nextStage} de ${plan.stages.length} completada. Revisa la auditoría y confirma la etapa ${session.nextStage+1}.`,'ok');
+   pubSetStatus(completed?`Carga terminada: ${fmt(report.success)} registros enviados, ${fmt(report.skipped)} omitidos, ${fmt(report.failed)} fallidos. Revisa la auditoría.`:`Etapa ${session.nextStage}/${plan.stages.length} terminada: ${fmt(report.success)} enviados, ${fmt(report.skipped)} omitidos. Continúa cuando confirmes la siguiente etapa.`,'ok');
    let reportBtn=$('pub-report');if(reportBtn)reportBtn.disabled=false;
    let nextBtn=$('pub-send');if(nextBtn)nextBtn.textContent=completed?'Plan finalizado':'Enviar etapa '+(session.nextStage+1)+' de '+plan.stages.length;
    let current=$('pub-stage-current');if(current)current.textContent=completed?'Todas las etapas completadas. Descarga el reporte JSON.':`Etapa ${session.nextStage} terminada. Siguiente: ${plan.stages[session.nextStage].join(', ')}`;
@@ -712,13 +747,14 @@ $('main').addEventListener('change',async e=>{let x=e.target;
  if(x.id==='pub-step-mode'){PUB.stepMode=x.checked;PUB.stageSession=null;pubSetStatus('Se actualizó el modo de publicación: prepara nuevamente el plan.');}
  if(x.id==='pub-id')PUB.preserveIds=x.checked;
  if(x.id==='pub-empty')PUB.includeEmpty=x.checked;
+ if(x.id==='pub-skip-conflicts')PUB.skipConflicts=x.checked;
  if(x.id==='pub-ack')PUB.approved=x.checked;
 });
 // Configuración reutilizable: almacena solamente la URL y opciones no secretas.
 const _pubOriginalMakeConfig = makeConfig;
 makeConfig = function(){
  const data=_pubOriginalMakeConfig();
- data.oracle={endpoint:PUB.url,auth:PUB.auth,testObject:PUB.testObject,mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,intervalMs:PUB.sleepMs};
+ data.oracle={endpoint:PUB.url,auth:PUB.auth,testObject:PUB.testObject,mode:PUB.mode,limit:PUB.limit,preserveIds:PUB.preserveIds,includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,intervalMs:PUB.sleepMs};
  return data;
 };
 const _pubOriginalApplyConfig = applyConfig;
@@ -730,7 +766,7 @@ applyConfig = function(cfg,refresh=true){
    if(typeof v.testObject==='string'&&/^[A-Za-z][A-Za-z0-9_]*$/.test(v.testObject))PUB.testObject=v.testObject;
    if(['sync','create','update','upsert'].includes(v.mode))PUB.mode=v.mode;
    if(['1','5','25','100','500','1000','ALL'].includes(String(v.limit)))PUB.limit=String(v.limit);
-   PUB.preserveIds=Boolean(v.preserveIds);PUB.includeEmpty=Boolean(v.includeEmpty);
+   PUB.preserveIds=Boolean(v.preserveIds);PUB.includeEmpty=Boolean(v.includeEmpty);if(typeof v.skipConflicts==='boolean')PUB.skipConflicts=v.skipConflicts;
    PUB.sleepMs=Math.min(5000,Math.max(0,Number(v.intervalMs)||0));
    PUB.testPassed=false;PUB.approved=false;
  }
