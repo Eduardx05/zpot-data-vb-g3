@@ -132,7 +132,7 @@ test('fusion is an independent page with ZIP/JSON download and explicit handoff 
  assert.match(ui,/id="fusion-download"/);
  assert.match(ui,/id="fusion-json"/);
  assert.match(ui,/id="fusion-publish"/);
- assert.match(ui,/window\.confirm\('Se preparará el ZIP fusionado/);
+ assert.match(ui,/window\.confirm\('Preparar SOLO el ZIP diferencial/);
  assert.match(ui,/PUB\.mode='sync'/);
  assert.doesNotMatch(ui,/fetch\([^\n]*method:\s*'POST'/);
 });
