@@ -102,7 +102,7 @@ test('400 uniqueness violation can be reconciled after concurrent insert without
    if(id==='1')throw Object.assign(Error('not found'),{status:404});
    return {status:200,json:{id:7}};
   },
-  create:async()=>{created++;throw Object.assign(Error('uniquenessViolation'),{status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation'});},
+  create:async()=>{created++;throw Object.assign(Error('uniquenessViolation'),{status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation',oracleDetail:'Non-unique values found for absenceName'});},
   update:async id=>{updates++;assert.equal(id,'7');return {status:200,json:{id:7}};}
  },{findUnique:async()=>{checks++;return checks===1?null:{id:'7',field:'absenceName'};}});
  assert.equal(out.operation,'updated');
@@ -116,4 +116,95 @@ test('publisher refuses to PATCH an Oracle ID already reconciled with another so
  assert.match(html,/const owner=session\.idMap\.ownerOf\(t,target\)/);
  assert.match(html,/if\(owner&&owner!==sourceId\)throw Error\('Colisión de IDs/);
  assert.match(html,/parsed\?\.\['o:errorDetails'\]/);
+});
+
+test('Oracle uniqueness violation rescues a case/space mismatch using declared absenceName only',async()=>{
+ const names=[{id:35,absenceName:'  CAPACITACIÓN  '}];
+ const calls=[];
+ const lookup=harness(async url=>{
+  calls.push('lookup '+url);
+  return {status:200,json:url.includes('&q=')?{items:[],hasMore:false}:{items:names,hasMore:false}};
+ });
+ const strict=await lookup('AbsenceTypeCatalogue',{id:1,absenceName:'Capacitación'},'https://oracle.test/data');
+ assert.equal(strict,null);
+ const reconciled=await lookup('AbsenceTypeCatalogue',{id:1,absenceName:'Capacitación'},'https://oracle.test/data','normalized','absenceName');
+ assert.equal(reconciled.id,'35');
+ assert.equal(reconciled.field,'absenceName');
+ const fn=loadSync();
+ let posted=0,patched=0;
+ const result=await fn('1',{
+  read:async id=>{
+   if(id==='1')throw Object.assign(new Error('Not found'),{status:404});
+   assert.equal(id,'35');
+   return {status:200,json:{id:35}};
+  },
+  create:async()=>{
+   posted++;
+   throw Object.assign(new Error('HTTP 400: Non-unique values found for absenceName'),{
+    status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation',
+    oracleDetail:'Non-unique values found for absenceName'
+   });
+  },
+  update:async id=>{patched++;assert.equal(id,'35');return {status:200,json:{id:35}};}
+ },{findUnique:field=>lookup('AbsenceTypeCatalogue',{id:1,absenceName:'Capacitación'},
+  'https://oracle.test/data',field?'normalized':'exact',field)});
+ assert.equal(result.operation,'updated');
+ assert.equal(result.targetId,'35');
+ assert.equal(posted,1);
+ assert.equal(patched,1);
+});
+
+test('normalized values with two Oracle matches are ambiguous and never PATCHed',async()=>{
+ const lookup=harness(async url=>({status:200,json:url.includes('&q=')?{items:[],hasMore:false}:{items:[
+  {id:33,absenceName:'CAPACITACIÓN'},
+  {id:34,absenceName:' capacitación '}
+ ],hasMore:false}}));
+ await assert.rejects(
+  lookup('AbsenceTypeCatalogue',{absenceName:'Capacitación'},'https://oracle.test/data','normalized','absenceName'),
+  /varias coincidencias/
+ );
+});
+
+test('HTTP 400 unrelated to declared uniqueness is never reconciled',async()=>{
+ const fn=loadSync();
+ let calls=0;
+ const error=Object.assign(new Error('invalid value'),{status:400,oracleType:'vbcs://businessObjects/data/validationFailure'});
+ await assert.rejects(fn('1',{
+  read:async()=>{throw Object.assign(Error('not found'),{status:404});},
+  create:async()=>{throw error;},
+  update:async()=>{calls++;return {status:200};}
+ },{findUnique:async()=>{calls++;return {id:'5',field:'absenceName'};}}),/invalid value/);
+ assert.equal(calls,1); // precheck only; no retry or PATCH
+});
+
+test('uniquenessViolation on unknown field must not choose another unique field',async()=>{
+ const fn=loadSync();
+ let fields=[];
+ await assert.rejects(fn('1',{
+  read:async()=>{throw Object.assign(new Error('Not found'),{status:404});},
+  create:async()=>{throw Object.assign(new Error('duplicate'),{
+   status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation',
+   oracleDetail:'Non-unique values found for someOtherField'
+  });},
+  update:async()=>{throw Error('unexpected PATCH');}
+ },{findUnique:async field=>{fields.push(field);if(!field)return null;throw Error('No matching declared unique field '+field);}}),/someOtherField/);
+ assert.deepEqual(fields,[undefined,'someOtherField']);
+});
+
+test('missing visible duplicate returns diagnosis rather than retrying POST',async()=>{
+ const fn=loadSync();
+ const calls=[];
+ await assert.rejects(fn('1',{
+  read:async id=>{calls.push('GET '+id);throw Object.assign(Error('Not found'),{status:404});},
+  create:async()=>{calls.push('POST');throw Object.assign(Error('duplicate'),{
+   status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation',
+   oracleDetail:'Non-unique values found for absenceName'
+  });},
+  update:async()=>{calls.push('PATCH');throw Error('unexpected');}
+ },{findUnique:async field=>{
+  calls.push('LOOKUP '+(field||'exact'));
+  if(field)throw Error('Oracle rechazó la clave única AbsenceTypeCatalogue.absenceName pero no se encontró un único registro visible con GET; revisa permisos de lectura.');
+  return null;
+ }}),/permisos de lectura/);
+ assert.deepEqual(calls,['LOOKUP exact','GET 1','POST','LOOKUP absenceName']);
 });
