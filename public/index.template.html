@@ -516,9 +516,131 @@ function pubRebuildIdSets(obj,validTables,kind){
  }
  return result;
 }
+// Legacy v3 reports already contain confirmed writes, but lacked a checkpoint.
+// Reconstruct ONLY from explicit operation IDs; never guess an Oracle ID from
+// a failed uniqueness log or from a catalog label.
+async function pubUpgradeLegacyAudit(raw){
+ if(!raw||raw.format!=='BNCR-ZPOT-Oracle-BO-API-v3'||raw.resumeState)
+  throw Error('No es una auditoría antigua BNCR v3.');
+ if(!['sync','update'].includes(raw.mode)||!raw.preserveIds)
+  throw Error('La auditoría antigua no corresponde a una carga PATCH por ID.');
+ if(raw.url!==pubUrlTemplate(PUB.url)||!pubIsConfirmedDevTarget(raw.url))
+  throw Error('El JSON de auditoría pertenece a otro endpoint Oracle.');
+ if(!Array.isArray(raw?.sources)||!raw.sources.length||
+    !Array.isArray(raw?.plan?.stages)||!raw.plan.stages.length)
+  throw Error('La auditoría anterior no incluye origen y etapas.');
+ if(raw.operationsTruncated||!Array.isArray(raw.operations)||raw.operations.length!==raw.success)
+  throw Error('La auditoría anterior no registra todas las operaciones confirmadas; no es seguro deducir dónde quedó.');
+ const allTableNames=raw.plan.stages.flat();
+ if(new Set(allTableNames).size!==allTableNames.length||allTableNames.some(x=>!/^[A-Za-z][A-Za-z0-9_]*$/.test(x)))
+  throw Error('Las etapas del JSON contienen BO duplicados o inválidos.');
+ const sourceIndexes=[];
+ for(const source of raw.sources){
+  const choices=D.map((d,i)=>d.filename===source.filename?i:-1).filter(i=>i>=0);
+  if(choices.length!==1)throw Error('No se encontró un único ZIP con el nombre '+String(source.filename)+'.');
+  sourceIndexes.push(choices[0]);
+ }
+ if(new Set(sourceIndexes).size!==sourceIndexes.length)
+  throw Error('Las fuentes de la auditoría contienen ZIP repetidos.');
+ if(sourceIndexes.some(i=>D[i]?.isDemo))throw Error('El JSON apunta a fuentes DEMO: no se permitirá recuperar.');
+ const matchingSchemas=sourceIndexes.filter(i=>D[i]?.sha===D[conSchema]?.sha);
+ const schemaIndex=matchingSchemas.length===1?matchingSchemas[0]:sourceIndexes[0];
+ // Old audit lacked ZIP hashes/schema options; explicitly tell the operator
+ // what cannot be independently proven and require the same physical ZIPs.
+ if(!window.confirm('AUDITORÍA ANTIGUA SIN CHECKPOINT\nEste JSON no guardaba hashes de ZIP ni configuración completa. Se han reconocido los nombres de los archivos, pero NO se puede probar que su contenido sea idéntico.\n\nConfirma que has cargado exactamente los ZIP originales, con el mismo límite y modo de consolidación. ZPOT verificará el total, etapas e IDs; no deducirá equivalencias de errores. ¿Continuar?'))return null;
+ consolidation=new Set(sourceIndexes);conSchema=schemaIndex;
+ PUB.tableSet=new Set(allTableNames);PUB.mode=raw.mode;PUB.preserveIds=true;
+ PUB.skipConflicts=raw.skipConflicts!==false;
+ const plan=pubGetPlan();
+ if(JSON.stringify(plan.stages)!==JSON.stringify(raw.plan.stages))
+  throw Error('Las etapas actuales no coinciden con la auditoría antigua.');
+ const packs=new Map();
+ for(const name of plan.order){
+  const pack=await pubConsolidated(name);
+  pack.rows=window.ZPOTOracleIdTools.sortSelfRows(name,pack.rows,pubRelationships([name])[name]||[]);
+  packs.set(name,pack);
+ }
+ const total=[...packs.values()].reduce((sum,pack)=>sum+pack.rows.length,0);
+ if(total!==raw.total)
+  throw Error('El límite o los datos del ZIP no coinciden con la auditoría: '+total+' filas actuales frente a '+raw.total+' anteriores. Ajusta las opciones antes de importar.');
+ const confirmed={},skipped={},mappings={};
+ const allowed=new Map([...packs].map(([name,pack])=>[name,new Set(pack.rows.map(row=>String(row.id??'').trim()))]));
+ const add=(bucket,table,id)=>{
+  const val=String(id??'').trim();
+  if(!allowed.get(table)?.has(val)||!val)throw Error('La auditoría menciona un ID ajeno al CSV: '+table+' ID '+val);
+  (bucket[table]??=[]).push(val);
+ };
+ for(const op of raw.operations){
+  const table=op.object,id=String(op.originalId??'').trim(),oracleId=String(op.oracleId??'').trim();
+  if(!/^[A-Za-z0-9._~-]+$/.test(oracleId)||!['created','updated'].includes(op.operation))
+   throw Error('Una operación confirmada no contiene el ID Oracle: '+table+'/'+id);
+  if(confirmed[table]?.includes(id))throw Error('La auditoría repite la misma operación: '+table+'/'+id);
+  add(confirmed,table,id);
+  (mappings[table]??={})[id]=oracleId;
+ }
+ const prior=raw.idMappings||{};
+ const registry=window.ZPOTOracleIdTools.createRegistry();
+ registry.load(prior);
+ registry.load(mappings);
+ const skipRows=raw.skippedRecords||[];
+ if(!Array.isArray(skipRows)||raw.skipped!==skipRows.length||raw.skippedTruncated)
+  throw Error('La auditoría antigua no documenta todos los omitidos. No es seguro reanudar automáticamente.');
+ for(const item of skipRows){
+  add(skipped,item.object,item.id);
+  if(confirmed[item.object]?.includes(String(item.id)))
+   throw Error('El mismo registro figura como confirmado y omitido.');
+ }
+ // The first row not proven confirmed/skipped is the exact restart cursor.
+ let cursor=null;
+ for(let si=0;si<plan.stages.length&&!cursor;si++){
+  for(let ti=0;ti<plan.stages[si].length&&!cursor;ti++){
+   const table=plan.stages[si][ti],rows=packs.get(table).rows;
+   for(let ri=0;ri<rows.length;ri++){
+    const id=String(rows[ri].id??'').trim();
+    if(!confirmed[table]?.includes(id)&&!skipped[table]?.includes(id)){
+     cursor={stageIndex:si,tableIndex:ti,rowIndex:ri};break;
+    }
+   }
+  }
+ }
+ if(!cursor)throw Error('Todos los registros del JSON ya figuran como procesados. No hay una etapa pendiente que recuperar.');
+ // A legacy failure at the restart row may be an ambiguous write. An HTTP 400
+ // uniquenessViolation means Oracle rejected the insert; other failures need review.
+ const lastError=raw.errors?.find(e=>e.object===plan.stages[cursor.stageIndex][cursor.tableIndex]&&String(e.id)===String(packs.get(e.object)?.rows[cursor.rowIndex]?.id));
+ if(lastError&&!/uniquenessViolation|Non-unique values found/i.test(String(lastError.message||lastError.oracleDetail||''))&&lastError.status!==400)
+  throw Error('El fallo anterior no confirma que la escritura fuera rechazada. Revisa el BO/ID de '+lastError.object+' antes de reanudar.');
+ const report={...raw,
+   errors:[...(raw.errors||[])],failedAttempts:Number(raw.failed||0),failed:0,
+   stages:(raw.stages||[]).map(stage=>({...stage,failed:0,status:stage.stage<=cursor.stageIndex?'completed':stage.status})),
+   tables:(raw.tables||[]).map(tab=>({...tab,failed:0})),
+   skippedRecords:skipRows,
+   idMappings:registry.snapshot(),
+   recoveryFromLegacyAudit:true,
+   recoveredAt:new Date().toISOString(),outcome:'paused'};
+ const state={
+  version:1,format:PUB_CHECKPOINT_FORMAT,url:raw.url,
+  fingerprint:pubRecoveryFingerprint(),
+  sourceHashes:[...consolidation].map(i=>String(D[i]?.sha||'')).sort(),
+  schemaHash:String(D[conSchema]?.sha||''),
+  tables:pubSelectedTables(),schemaMode,includeMode,
+  mode:PUB.mode,limit:PUB.limit,preserveIds:true,
+  includeEmpty:PUB.includeEmpty,skipConflicts:PUB.skipConflicts,
+  stepMode:PUB.stepMode,stages:plan.stages,
+  rowCounts:Object.fromEntries([...packs].map(([name,pack])=>[name,pack.rows.length])),
+  cursor,nextStage:cursor.stageIndex,successfulIds:confirmed,skippedIds:skipped,
+  idMappings:registry.snapshot(),unsafeRetry:false,inFlight:false,outcome:'paused'
+ };
+ pubLog('Auditoría antigua convertida: '+raw.operations.length+' registros confirmados, '+skipRows.length+' omitidos; reinicio en etapa '+(cursor.stageIndex+1)+'.');
+ return {format:PUB_CHECKPOINT_FORMAT,state,report};
+}
 async function pubResumeFromJson(raw){
  if(PUB.busy)throw Error('Detén la publicación actual antes de recuperar un JSON.');
  if(PUB.stageSession?.report?.success)throw Error('Descarga el reporte actual y restablece el plan antes de cargar otra recuperación.');
+ if(raw?.format==='BNCR-ZPOT-Oracle-BO-API-v3'&&!raw.resumeState){
+  const upgraded=await pubUpgradeLegacyAudit(raw);
+  if(!upgraded)return null;
+  raw=upgraded;
+ }
  const state=raw?.format===PUB_CHECKPOINT_FORMAT?raw.state:raw?.resumeState;
  const report=raw?.format===PUB_CHECKPOINT_FORMAT?raw.report:raw;
  if(!state||state.format!==PUB_CHECKPOINT_FORMAT||state.version!==1||!report||report.url!==state.url)
