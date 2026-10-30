@@ -562,7 +562,7 @@ async function pubSend(){
                if(conflictingField&&!uniqueFields.some(x=>x.name===conflictingField))
                  throw Error('Oracle reportó unicidad en un campo no declarado para '+t+': '+conflictingField+'. Se requiere revisión manual.');
                const matched=await pubFindUnique(t,payload,base,conflictingField?'normalized':'exact',conflictingField);
-               if(conflictingField&&!matched)throw Error('Oracle rechazó la clave única '+t+'.'+conflictingField+' pero no se encontró un único registro visible con GET (comparando texto normalizado). Revisa permisos de lectura y el valor existente en Oracle antes de reintentar.');
+               if(conflictingField&&!matched)throw pubSkipError('Oracle rechazó la clave única '+t+'.'+conflictingField+' pero no se encontró un único registro visible con GET (comparando texto normalizado). Revisa permisos de lectura y el valor existente en Oracle antes de reintentar.',{status:400,oracleType:'vbcs://businessObjects/data/uniquenessViolation',oracleDetail:'Non-unique values found for '+conflictingField,field:conflictingField});
                if(matched){
                  const previousOwner=session.idMap.ownerOf(t,matched.id);
                  if(previousOwner&&previousOwner!==sourceId)
@@ -622,7 +622,7 @@ async function pubSend(){
              if(id!==null&&id!==undefined&&String(id).trim())session.skippedIds.get(t).add(String(id).trim());
              if(report.skippedRecords.length<10000)report.skippedRecords.push(issue);
              else report.skippedTruncated=true;
-             pubLog('⚠ Omitido '+t+' origen ID '+issue.id+' | '+(issue.status?'HTTP '+issue.status+' | ':'')+(issue.field?'campo '+issue.field+(issue.fieldValue?'='+issue.fieldValue:'')+' | ':'')+issue.message+'. Dependientes con ese ID también serán omitidos.');
+             pubLog('⚠ REGISTRO OMITIDO | '+t+' | ID origen '+issue.id+'\n   '+(issue.status?'HTTP '+issue.status+' | ':'')+(issue.oracleType?'Oracle: '+issue.oracleType+' | ':'')+(issue.field?'Campo: '+issue.field+(issue.fieldValue?' | Valor origen: '+issue.fieldValue:'')+'\n   ':'')+'Detalle: '+(issue.oracleDetail||issue.message)+'\n   Acción: no se envió este registro; si un hijo depende de este ID, también se omitirá. Revisa la auditoría JSON.');
            }else{
              tab.failed++;report.failed++;stageReport.failed++;session.failed=true;
              if(report.errors.length<250)report.errors.push(issue);
@@ -636,15 +636,15 @@ async function pubSend(){
          if(PUB.sleepMs)await new Promise(resolve=>setTimeout(resolve,PUB.sleepMs));
        }
      }
-     stageReport.finishedAt=new Date().toISOString();stageReport.status='completed';
+     stageReport.finishedAt=new Date().toISOString();stageReport.status=stageReport.skipped?'completed-with-omissions':'completed';
      session.nextStage=stageIndex+1;
-     pubLog('✓ Etapa '+(stageIndex+1)+' completada. '+(PUB.stepMode?'Confirma la siguiente etapa cuando estés listo.':''));
+     pubLog('✓ Etapa '+(stageIndex+1)+' finalizada: '+stageReport.success+' enviados, '+stageReport.skipped+' omitidos. '+(PUB.stepMode?'Confirma la siguiente etapa cuando estés listo.':''));
    }
    const completed=session.nextStage>=plan.stages.length;
-   if(completed)report.finishedAt=new Date().toISOString();
+   if(completed){report.finishedAt=new Date().toISOString();report.outcome=report.skipped?'completed-with-omissions':'completed';}
    report.idMappings=session.idMap.snapshot();
    PUB.results=report;
-   pubSetStatus(completed?`Carga terminada: ${fmt(report.success)} registros enviados, ${fmt(report.skipped)} omitidos, ${fmt(report.failed)} fallidos. Revisa la auditoría.`:`Etapa ${session.nextStage}/${plan.stages.length} terminada: ${fmt(report.success)} enviados, ${fmt(report.skipped)} omitidos. Continúa cuando confirmes la siguiente etapa.`,'ok');
+   pubSetStatus(completed?`Carga terminada${report.skipped?' con omisiones':''}: ${fmt(report.success)} registros enviados, ${fmt(report.skipped)} omitidos, ${fmt(report.failed)} fallidos. Descarga la auditoría para revisar cada fila omitida.`:`Etapa ${session.nextStage}/${plan.stages.length} terminada: ${fmt(report.success)} enviados, ${fmt(report.skipped)} omitidos. Continúa cuando confirmes la siguiente etapa.`,'ok');
    let reportBtn=$('pub-report');if(reportBtn)reportBtn.disabled=false;
    let nextBtn=$('pub-send');if(nextBtn)nextBtn.textContent=completed?'Plan finalizado':'Enviar etapa '+(session.nextStage+1)+' de '+plan.stages.length;
    let current=$('pub-stage-current');if(current)current.textContent=completed?'Todas las etapas completadas. Descarga el reporte JSON.':`Etapa ${session.nextStage} terminada. Siguiente: ${plan.stages[session.nextStage].join(', ')}`;
